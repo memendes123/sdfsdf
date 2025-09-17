@@ -16,6 +16,7 @@ const {
     exportProfilesToCSV,
     clearInvalidAccounts,
     usageStats,
+    showQueueSnapshot,
     resetProfileCookies,
     backupDatabase,
     scheduleAutomaticBackups,
@@ -51,6 +52,7 @@ async function mainMenu() {
     log("14. Backup do banco de dados");
     log("15. Ciclo completo (adicionar, rodar e remover)");
     log("16. Ativar modo vigia (loop automático)");
+    log("17. Ver fila de execuções");
     log("0. Sair", true);
 
     rl.question("Escolha uma opção: ", async (opt) => {
@@ -120,6 +122,9 @@ async function mainMenu() {
                 closeReadline();
                 await keepBotAliveInteractive();
                 return;
+            case "17":
+                await showQueueSnapshot();
+                break;
             case "0":
                 rl.close();
                 return;

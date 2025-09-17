@@ -126,7 +126,9 @@
                             <th>Cliente</th>
                             <th>Status</th>
                             <th>Enfileirado em</th>
+                            <th>Limites</th>
                             <th>Comentários</th>
+                            <th>Ações</th>
                         </tr>
                     </thead>
                     <tbody data-queue-body>
@@ -142,12 +144,20 @@
                                         <span class="badge badge--status badge--<%= job.status === 'running' ? 'active' : 'pending' %>"><%= job.status %></span>
                                     </td>
                                     <td><%= job.enqueuedAt ? new Date(job.enqueuedAt).toLocaleString('pt-PT') : '—' %></td>
+                                    <td><%= job.maxCommentsPerAccount %> c/conta · <%= job.accountLimit %> contas</td>
                                     <td><%= job.totalComments || 0 %></td>
+                                    <td>
+                                        <% if (job.status === 'pending') { %>
+                                            <button class="btn btn--ghost btn--pill" data-queue-cancel="<%= job.id %>">Cancelar</button>
+                                        <% } else { %>
+                                            <span class="badge badge--muted">Em execução</span>
+                                        <% } %>
+                                    </td>
                                 </tr>
                             <% }) %>
                         <% } else { %>
                             <tr data-queue-empty-row>
-                                <td colspan="5" class="is-center is-muted">Nenhum pedido aguardando processamento.</td>
+                                <td colspan="7" class="is-center is-muted">Nenhum pedido aguardando processamento.</td>
                             </tr>
                         <% } %>
                     </tbody>

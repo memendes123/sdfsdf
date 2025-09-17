@@ -15,8 +15,10 @@
   "dependencies": {
     "colors": "^1.4.0",
     "dotenv": "^16.3.1",
+    "ejs": "^3.1.10",
     "form-data": "^4.0.0",
     "formdata-node": "^6.0.3",
+    "express": "^4.19.2",
     "minimist": "^1.2.8",
     "moment": "^2.29.4",
     "node-fetch": "^3.3.2",

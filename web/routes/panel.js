@@ -1,6 +1,5 @@
 const express = require('express');
 const router = express.Router();
-const basicAuth = require('basic-auth');
 const fs = require('fs');
 const path = require('path');
 
@@ -14,6 +13,7 @@ const {
   stopKeepAliveLoop,
   getKeepAliveStatus,
   describeApiError,
+  announceQueueEvent,
 } = require('../../src/util.cjs');
 const runQueue = require('../../src/runQueue.cjs');
 
@@ -23,12 +23,51 @@ userStore.ensureDataFile().catch((error) => {
   console.error('[Painel] Falha ao preparar storage de usuários:', error);
 });
 
+function extractBasicAuth(req) {
+  const header = req.headers?.authorization;
+  if (!header || typeof header !== 'string') {
+    return null;
+  }
+
+  const prefix = 'basic ';
+  if (!header.toLowerCase().startsWith(prefix)) {
+    return null;
+  }
+
+  const base64Credentials = header.slice(prefix.length).trim();
+  if (!base64Credentials) {
+    return null;
+  }
+
+  let decoded;
+  try {
+    decoded = Buffer.from(base64Credentials, 'base64').toString();
+  } catch (error) {
+    console.warn('[Painel] Cabeçalho Basic Auth inválido recebido:', error.message);
+    return null;
+  }
+
+  const separatorIndex = decoded.indexOf(':');
+  if (separatorIndex === -1) {
+    return null;
+  }
+
+  const name = decoded.slice(0, separatorIndex);
+  const pass = decoded.slice(separatorIndex + 1);
+
+  return {
+    name,
+    pass,
+  };
+}
+
 router.use((req, res, next) => {
-  const user = basicAuth(req);
+  const user = extractBasicAuth(req);
   if (!auth(user)) {
     res.set('WWW-Authenticate', 'Basic realm="Painel Rep4Rep"');
     return res.status(401).send('Auth required.');
   }
+  req.adminUser = user;
   res.locals.baseUrl = req.baseUrl || '';
   next();
 });
@@ -113,7 +152,6 @@ router.post('/api/run', async (req, res) => {
       });
       const queue = await runQueue.getQueueSnapshot();
       return { message: '✅ Execução concluída com prioridade.', summary, queue };
-      return { message: '✅ Execução concluída com prioridade.', summary };
     },
     stats: async () => {
       const stats = await collectUsageStats();
@@ -196,6 +234,54 @@ router.get('/api/queue', async (req, res) => {
   } catch (error) {
     console.error('[Painel] Falha ao consultar fila:', error);
     res.status(500).json({ success: false, error: 'Não foi possível obter a fila.' });
+  }
+});
+
+router.post('/api/queue/:id/cancel', async (req, res) => {
+  const { id } = req.params;
+  const { reason } = req.body || {};
+
+  if (!id) {
+    return res.status(400).json({ success: false, error: 'Identificador do pedido obrigatório.' });
+  }
+
+  try {
+    const result = await runQueue.cancelJob(id, { reason });
+    if (!result.cancelled) {
+      return res.status(409).json({
+        success: false,
+        error: 'O pedido já foi processado ou não está mais pendente.',
+        job: result.job,
+      });
+    }
+
+    try {
+      await announceQueueEvent({
+        type: 'job.cancelled',
+        job: result.job,
+        reason: reason || 'Cancelado manualmente',
+        cancelledBy: req.adminUser?.name || null,
+      });
+    } catch (notifyError) {
+      console.warn('[Painel] Falha ao enviar webhook de cancelamento:', notifyError);
+    }
+
+    const queue = await runQueue.getQueueSnapshot();
+    res.json({
+      success: true,
+      message: 'Pedido cancelado com sucesso.',
+      job: result.job,
+      queue,
+    });
+  } catch (error) {
+    console.error('[Painel] Falha ao cancelar pedido:', error);
+    const message = error?.message || 'Não foi possível cancelar o pedido.';
+    const status = /não encontrado/i.test(message)
+      ? 404
+      : /execu[cç][aã]o/i.test(message)
+      ? 409
+      : 500;
+    res.status(status).json({ success: false, error: message });
   }
 });
 
