@@ -19,6 +19,7 @@
             ? baseUrl
             : '';
     %>
+    <% const baseHref = typeof basePath !== 'undefined' ? basePath : (typeof baseUrl !== 'undefined' ? baseUrl : ''); %>
     <div class="app-shell">
         <header class="app-header">
             <div class="brand">
