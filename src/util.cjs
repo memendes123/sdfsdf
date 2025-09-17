@@ -14,6 +14,7 @@ const ROOT_DIR = path.join(__dirname, '..');
 const ACCOUNTS_PATH = path.join(ROOT_DIR, 'accounts.txt');
 const LOGS_DIR = path.join(ROOT_DIR, 'logs');
 
+
 let rl = null;
 
 function getReadline() {
@@ -94,6 +95,35 @@ function describeApiError(error) {
         return `${error.message}${suffix}${status}`;
     }
     return error?.message || String(error);
+}
+
+function parseStoredCookies(rawCookies, username) {
+    if (!rawCookies) {
+        return [];
+    }
+
+    if (typeof rawCookies === 'string') {
+        try {
+            const parsed = JSON.parse(rawCookies);
+            return Array.isArray(parsed) ? parsed : [];
+        } catch (error) {
+            if (username) {
+                log(`[${username}] Failed to parse stored cookies. Ignorando cookies salvos.`);
+            }
+            return [];
+        }
+    }
+
+    return Array.isArray(rawCookies) ? rawCookies : [];
+
+    const filePath = path.join(__dirname, '..', 'accounts.txt');
+    if (!fs.existsSync(filePath)) {
+        return;
+    }
+    const lines = fs.readFileSync(filePath, 'utf-8').split('\n');
+    const filtered = lines.filter(line => !line.startsWith(username + ':'));
+    fs.writeFileSync(filePath, filtered.join('\n'));
+
 }
 
 function parseStoredCookies(rawCookies, username) {
@@ -316,6 +346,18 @@ async function autoRunComments(profile, client, tasks, authorSteamProfileId, max
                 log(`[${profile.username}] falha ao confirmar tarefa adicional: ${describeApiError(error)}`);
             }
 
+            }
+
+            completedTasks.add(randomTask.taskId);
+            commentsPosted++;
+            consecutiveFailures = 0;
+
+            try {
+                await api.completeTask(randomTask.taskId, randomTask.requiredCommentId, authorSteamProfileId); // Mark additional comments as completed
+            } catch (error) {
+                log(`[${profile.username}] falha ao confirmar tarefa adicional: ${describeApiError(error)}`);
+            }
+
             try {
                 await db.updateLastComment(profile.steamId);
             } catch (error) {
@@ -465,6 +507,11 @@ async function authAllProfiles() {
             }
         } catch (error) {
             log(`[${profile.username}] Erro ao sincronizar: ${describeApiError(error)}`, true);
+
+            log(`[${profile.username}] Erro ao sincronizar: ${describeApiError(error)}`, true);
+
+            log(`[${profile.username}] Erro ao sincronizar: ${error.message}`, true);
+
         }
 
         if (i !== profiles.length - 1) {
@@ -759,6 +806,11 @@ async function checkAndSyncProfiles() {
             }
         } catch (error) {
             log(`[${profile.username}] Erro ao sincronizar: ${describeApiError(error)}`);
+
+            log(`[${profile.username}] Erro ao sincronizar: ${describeApiError(error)}`);
+
+            log(`[${profile.username}] Erro ao sincronizar: ${error.message}`);
+
         }
     }
     log('Check and sync completed');
@@ -886,6 +938,8 @@ async function backupDatabase() {
         return null;
     }
 
+function backupDatabase() {
+    const src = db.getDatabasePath();
     const destDir = path.join(__dirname, '..', 'backups');
     if (!fs.existsSync(destDir)) {
         fs.mkdirSync(destDir, { recursive: true });

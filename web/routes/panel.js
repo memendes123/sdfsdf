@@ -46,6 +46,7 @@ router.get('/run/:command', async (req, res) => {
             if (!filePath) {
                 return '⚠️ Nenhum banco de dados encontrado para backup.';
             }
+            const filePath = backupDatabase();
             return `📦 Backup criado em: ${filePath}`;
         }
     };
