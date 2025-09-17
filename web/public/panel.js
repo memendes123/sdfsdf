@@ -29,10 +29,19 @@
   const queueHistoryContainer = document.querySelector('[data-queue-history-container]');
   const queueHistoryList = document.querySelector('[data-queue-history]');
   const queueRefreshButton = document.querySelector('[data-queue-refresh]');
+  const queueClearButton = document.querySelector('[data-queue-clear]');
+  const autoRunForm = document.querySelector('[data-auto-run-form]');
+  const autoRunMaxInput = document.querySelector('[data-auto-run-max]');
+  const autoRunAccountsInput = document.querySelector('[data-auto-run-accounts]');
+  const autoRunKeyInput = document.querySelector('[data-auto-run-key]');
+  const autoRunTotalInput = document.querySelector('[data-auto-run-total]');
+  const autoRunStartButtons = document.querySelectorAll('[data-command="autoRun"]');
+  const autoRunStopButtons = document.querySelectorAll('[data-command="autoRunStop"]');
 
   let toastTimeout = null;
   let cachedUsers = [];
   let cachedQueue = window.__INITIAL_QUEUE__ || null;
+  let queueRunnerStatus = window.__QUEUE_RUNNER__ || null;
 
   function showToast(message, variant = 'success') {
     if (!toastEl) return;
@@ -54,6 +63,116 @@
     if (statEls.cooling) statEls.cooling.textContent = stats.coolingDown ?? '--';
     if (statEls.comments) statEls.comments.textContent = stats.commentsLast24h ?? '--';
   }
+
+  function sanitizeLimit(value, fallback, max) {
+    const num = Number(value);
+    if (!Number.isFinite(num) || num <= 0) {
+      return fallback;
+    }
+    return Math.max(1, Math.min(max, Math.floor(num)));
+  }
+
+  function getAutoRunPayload() {
+    const payload = {};
+    const totalValue = autoRunTotalInput ? sanitizeLimit(autoRunTotalInput.value, 0, 1000) : 0;
+    const maxValue = autoRunMaxInput
+      ? sanitizeLimit(autoRunMaxInput.value, 1000, 1000)
+      : 1000;
+    const accountValue = autoRunAccountsInput
+      ? sanitizeLimit(autoRunAccountsInput.value, 100, 100)
+      : 100;
+
+    if (totalValue > 0) {
+      payload.totalComments = totalValue;
+    }
+    if (maxValue) {
+      payload.maxCommentsPerAccount = maxValue;
+    }
+    if (accountValue) {
+      payload.accountLimit = accountValue;
+    }
+
+    if (autoRunKeyInput) {
+      const key = autoRunKeyInput.value && autoRunKeyInput.value.trim();
+      if (key) {
+        payload.apiToken = key;
+      }
+    }
+
+    return payload;
+  }
+
+  function applyAutoRunSettings(applied) {
+    if (!applied) {
+      return;
+    }
+    if (autoRunTotalInput) {
+      if (applied.requestedComments != null) {
+        autoRunTotalInput.value = applied.requestedComments;
+      } else {
+        autoRunTotalInput.value = '';
+      }
+    }
+    if (autoRunMaxInput && applied.maxCommentsPerAccount != null) {
+      autoRunMaxInput.value = applied.maxCommentsPerAccount;
+    }
+    if (autoRunAccountsInput && applied.accountLimit != null) {
+      autoRunAccountsInput.value = applied.accountLimit;
+    }
+  }
+
+  function renderQueueRunnerStatus(status) {
+    queueRunnerStatus = status || null;
+    const running = Boolean(status?.running);
+
+    autoRunStartButtons.forEach((button) => {
+      if (!button) return;
+      if (!button.dataset.originalLabel) {
+        button.dataset.originalLabel = button.textContent;
+      }
+
+      if (running) {
+        const labelParts = ['Executando'];
+        const jobUser = status?.currentJob?.user;
+        const jobLabel = jobUser?.fullName || jobUser?.username || jobUser?.id || null;
+        if (jobLabel) {
+          labelParts.push(`(${jobLabel})`);
+        }
+        button.textContent = labelParts.join(' ');
+      } else {
+        button.textContent = button.dataset.originalLabel;
+      }
+
+      button.disabled = running;
+    });
+
+    autoRunStopButtons.forEach((button) => {
+      if (!button) return;
+      if (!button.dataset.originalLabel) {
+        button.dataset.originalLabel = button.textContent;
+      }
+      button.disabled = !running;
+      button.textContent = button.dataset.originalLabel;
+    });
+
+    if (status?.options) {
+      if (autoRunTotalInput) {
+        if (status.options.requestedComments != null) {
+          autoRunTotalInput.value = status.options.requestedComments;
+        } else {
+          autoRunTotalInput.value = '';
+        }
+      }
+      if (autoRunMaxInput && status.options.maxCommentsPerAccount != null) {
+        autoRunMaxInput.value = status.options.maxCommentsPerAccount;
+      }
+      if (autoRunAccountsInput && status.options.accountLimit != null) {
+        autoRunAccountsInput.value = status.options.accountLimit;
+      }
+    }
+  }
+
+  renderQueueRunnerStatus(queueRunnerStatus);
 
   function statusLabel(status) {
     switch (status) {
@@ -210,6 +329,34 @@
     return `${hours.toFixed(hours >= 10 ? 0 : 1)} h`;
   }
 
+  function createQueueButton(label, dataset = {}, { title = '', variant = 'ghost' } = {}) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    const classes = ['btn', 'btn--pill', 'btn--small'];
+    if (variant) {
+      classes.push(`btn--${variant}`);
+    }
+    button.className = classes.join(' ');
+    if (title) {
+      button.title = title;
+      button.setAttribute('aria-label', title);
+    }
+    Object.entries(dataset).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) {
+        button.dataset[key] = value;
+      }
+    });
+    button.textContent = label;
+    return button;
+  }
+
+  function getPendingJobsFromQueue(queue) {
+    if (!queue || !Array.isArray(queue.jobs)) {
+      return [];
+    }
+    return queue.jobs.filter((job) => job.status === 'pending');
+  }
+
   function renderQueue(queue) {
     if (!queueBody) {
       return;
@@ -267,9 +414,18 @@
         const limitCell = document.createElement('td');
         const maxComments = Number(job.maxCommentsPerAccount);
         const accountLimit = Number(job.accountLimit);
-        const maxText = Number.isFinite(maxComments) ? `${maxComments} c/conta` : '—';
-        const accountText = Number.isFinite(accountLimit) ? `${accountLimit} contas` : '—';
-        limitCell.textContent = `${maxText} · ${accountText}`;
+        const requested = Number(job.requestedComments);
+        const limitParts = [];
+        if (Number.isFinite(requested) && requested > 0) {
+          limitParts.push(`${requested} totais`);
+        }
+        if (Number.isFinite(maxComments) && maxComments > 0) {
+          limitParts.push(`${maxComments} c/conta`);
+        }
+        if (Number.isFinite(accountLimit) && accountLimit > 0) {
+          limitParts.push(`${accountLimit} conta(s)`);
+        }
+        limitCell.textContent = limitParts.length ? limitParts.join(' · ') : '—';
         row.appendChild(limitCell);
 
         const commentsCell = document.createElement('td');
@@ -278,13 +434,43 @@
         row.appendChild(commentsCell);
 
         const actionsCell = document.createElement('td');
+        actionsCell.className = 'is-right';
         if (job.status === 'pending') {
-          const cancelButton = document.createElement('button');
-          cancelButton.type = 'button';
-          cancelButton.className = 'btn btn--ghost btn--pill';
-          cancelButton.dataset.queueCancel = job.id;
-          cancelButton.textContent = 'Cancelar';
-          actionsCell.appendChild(cancelButton);
+          const actionsWrapper = document.createElement('div');
+          actionsWrapper.className = 'queue-actions';
+
+          const topButton = createQueueButton(
+            'Topo',
+            { queueMove: 'top', queueId: job.id },
+            { title: 'Enviar para o topo da fila' },
+          );
+          const upButton = createQueueButton(
+            '↑',
+            { queueMove: 'up', queueId: job.id },
+            { title: 'Subir uma posição' },
+          );
+          const downButton = createQueueButton(
+            '↓',
+            { queueMove: 'down', queueId: job.id },
+            { title: 'Descer uma posição' },
+          );
+          const bottomButton = createQueueButton(
+            'Fim',
+            { queueMove: 'bottom', queueId: job.id },
+            { title: 'Enviar para o final da fila' },
+          );
+          const cancelButton = createQueueButton(
+            'Cancelar',
+            { queueCancel: job.id },
+            { title: 'Cancelar pedido', variant: 'outline' },
+          );
+
+          actionsWrapper.appendChild(topButton);
+          actionsWrapper.appendChild(upButton);
+          actionsWrapper.appendChild(downButton);
+          actionsWrapper.appendChild(bottomButton);
+          actionsWrapper.appendChild(cancelButton);
+          actionsCell.appendChild(actionsWrapper);
         } else {
           const badge = document.createElement('span');
           badge.className = 'badge badge--muted';
@@ -412,6 +598,9 @@
         cachedQueue = data.queue;
         renderQueue(cachedQueue);
       }
+      if (data?.runner) {
+        renderQueueRunnerStatus(data.runner);
+      }
     } catch (error) {
       console.error('[Painel] Falha ao atualizar fila:', error);
       showToast(error.message || 'Erro ao atualizar fila.', 'error');
@@ -440,6 +629,9 @@
         cachedQueue = data.queue;
         renderQueue(cachedQueue);
       }
+      if (data.runner) {
+        renderQueueRunnerStatus(data.runner);
+      }
       showToast(data.message || 'Pedido cancelado com sucesso.', 'success');
     } catch (error) {
       showToast(error.message || 'Erro ao cancelar pedido.', 'error');
@@ -450,11 +642,107 @@
     }
   }
 
+  async function reorderQueueJob(jobId, action, button) {
+    if (!jobId) {
+      return;
+    }
+
+    if (!cachedQueue) {
+      await refreshQueue();
+      return;
+    }
+
+    const pendingJobs = getPendingJobsFromQueue(cachedQueue);
+    if (pendingJobs.length <= 1) {
+      return;
+    }
+
+    const currentIndex = pendingJobs.findIndex((job) => job.id === jobId);
+    if (currentIndex === -1) {
+      showToast('Pedido não está mais pendente.', 'error');
+      refreshQueue();
+      return;
+    }
+
+    let targetIndex = currentIndex;
+    switch (action) {
+      case 'top':
+        targetIndex = 0;
+        break;
+      case 'up':
+        targetIndex = Math.max(0, currentIndex - 1);
+        break;
+      case 'down':
+        targetIndex = Math.min(pendingJobs.length - 1, currentIndex + 1);
+        break;
+      case 'bottom':
+        targetIndex = pendingJobs.length - 1;
+        break;
+      default:
+        return;
+    }
+
+    if (targetIndex === currentIndex) {
+      return;
+    }
+
+    try {
+      if (button) {
+        button.disabled = true;
+      }
+      const res = await fetch(buildUrl(`/api/queue/${encodeURIComponent(jobId)}/reorder`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ position: targetIndex + 1 }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.success === false) {
+        throw new Error(data.error || 'Não foi possível atualizar a ordem.');
+      }
+
+      if (data.queue) {
+        cachedQueue = data.queue;
+        renderQueue(cachedQueue);
+      } else {
+        await refreshQueue();
+      }
+      if (data.runner) {
+        renderQueueRunnerStatus(data.runner);
+      }
+
+      showToast(data.message || 'Ordem do pedido atualizada.', 'success');
+    } catch (error) {
+      console.error('[Painel] Falha ao reordenar pedido:', error);
+      showToast(error.message || 'Erro ao reordenar pedido.', 'error');
+    } finally {
+      if (button) {
+        button.disabled = false;
+      }
+    }
+  }
+
   async function runCommand(command, button) {
     if (!command) return;
     const payload = { command };
+    const isAutoRunStart = command === 'autoRun';
+    const isAutoRunStop = command === 'autoRunStop';
+
+    if (isAutoRunStart) {
+      Object.assign(payload, getAutoRunPayload());
+    }
+
     try {
       if (button) button.disabled = true;
+      if (isAutoRunStart) {
+        autoRunStartButtons.forEach((btn) => {
+          if (btn) btn.disabled = true;
+        });
+      } else if (isAutoRunStop) {
+        autoRunStopButtons.forEach((btn) => {
+          if (btn) btn.disabled = true;
+        });
+      }
+
       const res = await fetch(buildUrl('/api/run'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -501,12 +789,18 @@
         cachedQueue = data.queue;
         renderQueue(cachedQueue);
       }
+      if (data.applied) {
+        applyAutoRunSettings(data.applied);
+      }
+      if (data.runner) {
+        renderQueueRunnerStatus(data.runner);
+      }
 
       showToast(message, 'success');
       if (command === 'autoRun' || command === 'stats') {
         refreshStats();
       }
-      if (command === 'autoRun') {
+      if (command === 'autoRun' || command === 'autoRunStop') {
         refreshUsers();
         refreshQueue();
       }
@@ -515,8 +809,10 @@
         outputEl.textContent = `❌ ${error.message}`;
       }
       showToast(error.message || 'Erro ao executar comando.', 'error');
+      renderQueueRunnerStatus(queueRunnerStatus);
     } finally {
       if (button) button.disabled = false;
+      renderQueueRunnerStatus(queueRunnerStatus);
     }
   }
 
@@ -578,8 +874,67 @@
     });
   }
 
+  if (queueClearButton) {
+    queueClearButton.addEventListener('click', async () => {
+      if (!cachedQueue) {
+        await refreshQueue();
+      }
+
+      const pendingJobs = getPendingJobsFromQueue(cachedQueue);
+      if (pendingJobs.length === 0) {
+        showToast('Nenhum pedido pendente para remover.', 'error');
+        return;
+      }
+
+      const confirmed = window.confirm('Remover todos os pedidos pendentes da fila?');
+      if (!confirmed) {
+        return;
+      }
+
+      try {
+        queueClearButton.disabled = true;
+        const res = await fetch(buildUrl('/api/queue/clear'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reason: 'Cancelado manualmente via painel' }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.success === false) {
+          throw new Error(data.error || 'Não foi possível limpar a fila.');
+        }
+
+        if (data.queue) {
+          cachedQueue = data.queue;
+          renderQueue(cachedQueue);
+        } else {
+          await refreshQueue();
+        }
+        if (data.runner) {
+          renderQueueRunnerStatus(data.runner);
+        }
+
+        showToast(data.message || 'Fila limpa com sucesso.', 'success');
+      } catch (error) {
+        console.error('[Painel] Falha ao limpar fila:', error);
+        showToast(error.message || 'Erro ao limpar fila.', 'error');
+      } finally {
+        queueClearButton.disabled = false;
+      }
+    });
+  }
+
   if (queueBody) {
     queueBody.addEventListener('click', (event) => {
+      const moveButton = event.target.closest('[data-queue-move]');
+      if (moveButton) {
+        event.preventDefault();
+        const { queueMove, queueId } = moveButton.dataset;
+        if (queueId && queueMove) {
+          reorderQueueJob(queueId, queueMove, moveButton);
+        }
+        return;
+      }
+
       const cancelButton = event.target.closest('[data-queue-cancel]');
       if (cancelButton) {
         event.preventDefault();

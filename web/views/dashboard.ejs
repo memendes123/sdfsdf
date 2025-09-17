@@ -6,6 +6,7 @@
         <p>Automatize comentários, monitore contas e distribua créditos para clientes conectados à sua rede Rep4Rep.</p>
         <div class="hero__actions">
             <button class="btn btn--primary" data-command="autoRun">▶️ Executar autoRun</button>
+            <button class="btn btn--ghost" data-command="autoRunStop">⏹️ Parar autoRun</button>
             <button class="btn btn--secondary" data-command="backup">💾 Criar backup</button>
             <a class="btn btn--ghost" href="<%= (panelBase || '') + '/logs' %>">📜 Ver logs</a>
         </div>
@@ -50,8 +51,30 @@
         </header>
         <div class="card__body card__body--spaced">
             <p>Os comandos são executados de forma síncrona. Aguarde o retorno na área de saída ao lado.</p>
+            <form class="run-config" data-auto-run-form>
+                <div class="run-config__grid">
+                    <label>
+                        <span>Total de comentários</span>
+                        <input type="number" min="1" max="1000" step="1" value="<%= (initialRunner && initialRunner.options && initialRunner.options.requestedComments) || '' %>" data-auto-run-total placeholder="Opcional" />
+                    </label>
+                    <label>
+                        <span>Comentários por conta</span>
+                        <input type="number" min="1" max="1000" step="1" value="<%= (initialRunner && initialRunner.options && initialRunner.options.maxCommentsPerAccount) || 1000 %>" data-auto-run-max />
+                    </label>
+                    <label>
+                        <span>Limite de contas</span>
+                        <input type="number" min="1" max="100" step="1" value="<%= (initialRunner && initialRunner.options && initialRunner.options.accountLimit) || 100 %>" data-auto-run-accounts />
+                    </label>
+                    <label>
+                        <span>Key Rep4Rep (opcional)</span>
+                        <input type="password" data-auto-run-key placeholder="Sobrescrever key do admin" />
+                    </label>
+                </div>
+                <p class="run-config__hint">Valores máximos: 1000 comentários totais, 1000 por conta e 100 contas por execução.</p>
+            </form>
             <div class="quick-actions">
                 <button class="btn" data-command="autoRun">Rodar autoRun</button>
+                <button class="btn btn--outline" data-command="autoRunStop">Parar autoRun</button>
                 <button class="btn" data-command="stats">Gerar estatísticas</button>
                 <button class="btn" data-command="backup">Criar backup</button>
             </div>
@@ -105,7 +128,10 @@
                 <h2>Fila de execuções</h2>
                 <p>Acompanhe os pedidos dos clientes e a previsão média para início.</p>
             </div>
-            <button class="btn btn--ghost" type="button" data-queue-refresh>Atualizar fila</button>
+            <div class="card__actions">
+                <button class="btn btn--ghost" type="button" data-queue-refresh>Atualizar fila</button>
+                <button class="btn btn--outline" type="button" data-queue-clear>Remover pendentes</button>
+            </div>
         </header>
         <div class="card__body card__body--spaced">
             <div class="queue-metrics">
@@ -381,4 +407,4 @@
     </div>
 </div>
 
-<%- include('partials/layout-end', { includePanelScript: true, initialQueue: initialQueue, panelBase }) %>
+<%- include('partials/layout-end', { includePanelScript: true, initialQueue: initialQueue, initialRunner: initialRunner, panelBase }) %>

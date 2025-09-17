@@ -125,10 +125,26 @@
     });
   }
 
-  const artifactCleanupDelays = [0, 120, 400, 1200, 2400];
+  function renderLanguageOptions(dropdown) {
+    if (!dropdown) {
+      return;
+    }
+
+    dropdown.innerHTML = '';
+    Object.entries(languages).forEach(([code, entry]) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'language-option';
+      button.dataset.languageOption = code;
+      button.textContent = entry.label;
+      button.setAttribute('role', 'menuitemradio');
+      button.setAttribute('aria-checked', 'false');
+      button.setAttribute('translate', 'no');
+      dropdown.appendChild(button);
+    });
   }
 
-  const artifactCleanupDelays = [0, 120, 400];
+  const artifactCleanupDelays = [0, 120, 400, 1200, 2400];
   function scheduleArtifactCleanup() {
     artifactCleanupDelays.forEach((delay) => {
       window.setTimeout(cleanGoogleArtifacts, delay);
@@ -273,6 +289,8 @@
     if (!toggle || !dropdown) {
       return;
     }
+
+    renderLanguageOptions(dropdown);
 
     toggle.addEventListener('click', (event) => {
       event.preventDefault();

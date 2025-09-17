@@ -5,6 +5,7 @@
   const dashboardSection = document.querySelector('[data-dashboard]');
   const runButton = document.querySelector('[data-run-button]');
   const runOutput = document.querySelector('[data-run-output]');
+  const runTotalInput = document.querySelector('[data-run-total]');
   const keyForm = document.querySelector('[data-key-form]');
   const statusBadge = document.querySelector('[data-client-status]');
   const creditsEl = document.querySelector('[data-client-credits]');
@@ -24,7 +25,9 @@
   const queueAheadEl = document.querySelector('[data-client-queue-ahead]');
   const queueEstimateEl = document.querySelector('[data-client-queue-estimate]');
   const queueTotalEl = document.querySelector('[data-client-queue-total]');
+  const queueRequestedEl = document.querySelector('[data-client-queue-requested]');
   const queueRefreshButton = document.querySelector('[data-client-queue-refresh]');
+  const queueCancelButton = document.querySelector('[data-client-queue-cancel]');
 
   const storageKeys = {
     userId: 'rep4repUserId',
@@ -208,6 +211,38 @@
     }
   }
 
+  function sanitizeLimit(value, fallback, max) {
+    const num = Number(value);
+    if (!Number.isFinite(num) || num <= 0) {
+      return fallback;
+    }
+    return Math.max(1, Math.min(max, Math.floor(num)));
+  }
+
+  function getRunPayload() {
+    const payload = { command: 'autoRun' };
+    const totalValue = runTotalInput ? sanitizeLimit(runTotalInput.value, 0, 1000) : 0;
+
+    if (totalValue > 0) {
+      payload.totalComments = totalValue;
+    }
+
+    return payload;
+  }
+
+  function applyRunSettings(applied) {
+    if (!applied) {
+      return;
+    }
+    if (runTotalInput) {
+      if (applied.requestedComments != null) {
+        runTotalInput.value = applied.requestedComments;
+      } else if (!runTotalInput.value) {
+        runTotalInput.value = runTotalInput.defaultValue || '';
+      }
+    }
+  }
+
   function formatQueueWait(ms) {
     const value = Number(ms);
     if (!Number.isFinite(value) || value <= 0) {
@@ -256,12 +291,36 @@
         const total = Number(queue.queueLength);
         queueTotalEl.textContent = Number.isFinite(total) ? total : '--';
       }
+      if (queueRequestedEl) {
+        const requested = Number(queue.job?.requestedComments ?? queue.job?.maxCommentsPerAccount);
+        queueRequestedEl.textContent = Number.isFinite(requested) && requested > 0 ? requested : '--';
+      }
+      if (queueCancelButton) {
+        const pendingJob = queue.job && queue.job.status === 'pending' && queue.job.id ? queue.job : null;
+        if (pendingJob) {
+          queueCancelButton.hidden = false;
+          queueCancelButton.disabled = false;
+          queueCancelButton.dataset.jobId = pendingJob.id;
+        } else {
+          queueCancelButton.hidden = true;
+          queueCancelButton.disabled = true;
+          delete queueCancelButton.dataset.jobId;
+        }
+      }
     } else {
       state.queue = null;
       if (queueMessageEl) {
         queueMessageEl.textContent = 'Nenhuma ordem aguardando processamento.';
       }
       queueCard.hidden = true;
+      if (queueCancelButton) {
+        queueCancelButton.hidden = true;
+        queueCancelButton.disabled = false;
+        delete queueCancelButton.dataset.jobId;
+      }
+      if (queueRequestedEl) {
+        queueRequestedEl.textContent = '--';
+      }
     }
 
     refreshRunButton();
@@ -401,7 +460,7 @@
         const data = await apiFetch('/api/user/run', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ command: 'autoRun' }),
+          body: JSON.stringify(getRunPayload()),
         });
         if (data?.queue) {
           const lines = [
@@ -419,11 +478,39 @@
           if (Number.isFinite(total)) {
             lines.push(`Pedidos na fila: ${total}`);
           }
+          if (data?.overrides?.applied) {
+            const applied = data.overrides.applied;
+            const totalInfo =
+              applied.requestedComments != null
+                ? `${applied.requestedComments} comentário(s) totais`
+                : null;
+            const perAccountInfo =
+              applied.maxCommentsPerAccount != null
+                ? `${applied.maxCommentsPerAccount} comentário(s) por conta`
+                : null;
+            const accountInfo =
+              applied.accountLimit != null ? `${applied.accountLimit} conta(s)` : null;
+            const infoParts = [totalInfo, perAccountInfo, accountInfo].filter(Boolean);
+            if (infoParts.length) {
+              lines.push(`Limites aplicados: ${infoParts.join(' · ')}`);
+            }
+          }
           runOutput.textContent = lines.join('\n');
           renderQueueStatus(data.queue);
         } else {
           runOutput.textContent = data.message || 'Pedido registrado.';
           renderQueueStatus(null);
+        }
+        if (!data?.queue && data?.overrides?.applied) {
+          const applied = data.overrides.applied;
+          const lines = [
+            data.message || 'Pedido registrado.',
+            `Limites aplicados: ${applied.maxCommentsPerAccount} comentário(s) · ${applied.accountLimit} conta(s)`,
+          ];
+          runOutput.textContent = lines.join('\n');
+        }
+        if (data?.overrides?.applied) {
+          applyRunSettings(data.overrides.applied);
         }
         showToast(data.message || 'Pedido enviado.');
       } catch (error) {
@@ -440,6 +527,41 @@
   if (queueRefreshButton) {
     queueRefreshButton.addEventListener('click', () => {
       loadQueueStatus();
+    });
+  }
+
+  if (queueCancelButton) {
+    queueCancelButton.addEventListener('click', async () => {
+      const jobId = queueCancelButton.dataset.jobId;
+      if (!jobId) {
+        showToast('Nenhum pedido pendente para remover.', 'error');
+        return;
+      }
+
+      const confirmed = window.confirm('Deseja cancelar seu pedido na fila?');
+      if (!confirmed) {
+        return;
+      }
+
+      try {
+        queueCancelButton.disabled = true;
+        const data = await apiFetch('/api/user/queue/cancel', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jobId }),
+        });
+        if (data?.queue) {
+          renderQueueStatus(data.queue);
+        } else {
+          renderQueueStatus(null);
+        }
+        showToast(data.message || 'Pedido removido da fila.');
+      } catch (error) {
+        showToast(error.message || 'Não foi possível cancelar o pedido.', 'error');
+        loadQueueStatus();
+      } finally {
+        queueCancelButton.disabled = false;
+      }
     });
   }
 
