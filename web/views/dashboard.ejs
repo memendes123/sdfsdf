@@ -1,3 +1,158 @@
+<%- include('partials/layout-start', { title: title || 'Painel', page }) %>
+<section class="hero">
+    <div class="hero__content">
+        <h1>Centro de Controle Rep4Rep</h1>
+        <p>Automatize comentários, monitore contas e prepare o terreno para vender créditos gerenciados com as suas contas Steam.</p>
+        <div class="hero__actions">
+            <button class="btn btn--primary" data-command="autoRun">▶️ Executar autoRun</button>
+            <button class="btn btn--secondary" data-command="backup">💾 Criar backup</button>
+            <a class="btn btn--ghost" href="/logs">📜 Ver logs</a>
+        </div>
+        <p class="hero__hint">Dica: configure o arquivo <code>accounts.txt</code> e garanta que o <code>REP4REP_KEY</code> esteja definido antes de rodar as automações.</p>
+    </div>
+    <aside class="hero__card">
+        <h2>Resumo rápido</h2>
+        <dl class="stat-preview">
+            <div>
+                <dt>Perfis cadastrados</dt>
+                <dd data-stat-total><%= initialStats ? initialStats.total : '--' %></dd>
+            </div>
+            <div>
+                <dt>Prontos para comentar</dt>
+                <dd data-stat-ready><%= initialStats ? initialStats.ready : '--' %></dd>
+            </div>
+            <div>
+                <dt>Em cooldown</dt>
+                <dd data-stat-cooling><%= initialStats ? initialStats.coolingDown : '--' %></dd>
+            </div>
+            <div>
+                <dt>Comentários (24h)</dt>
+                <dd data-stat-comments><%= initialStats ? initialStats.commentsLast24h : '--' %></dd>
+            </div>
+        </dl>
+        <button class="btn btn--outline" data-command="stats">🔄 Atualizar estatísticas</button>
+    </aside>
+</section>
+
+<section class="grid">
+    <article class="card">
+        <header class="card__header">
+            <div>
+                <h2>Execução rápida</h2>
+                <p>Comandos seguros executados direto no servidor.</p>
+            </div>
+        </header>
+        <div class="card__body card__body--spaced">
+            <p>Os comandos são executados de forma síncrona. Aguarde o retorno na área de saída ao lado.</p>
+            <div class="quick-actions">
+                <button class="btn" data-command="autoRun">Rodar autoRun</button>
+                <button class="btn" data-command="stats">Gerar estatísticas</button>
+                <button class="btn" data-command="backup">Criar backup</button>
+            </div>
+        </div>
+    </article>
+    <article class="card">
+        <header class="card__header">
+            <div>
+                <h2>Saída dos comandos</h2>
+                <p>Acompanhe os resultados sem sair do painel.</p>
+            </div>
+        </header>
+        <div class="card__body">
+            <pre class="command-output" data-command-output>Selecione um comando para ver o resultado aqui.</pre>
+        </div>
+    </article>
+</section>
+
+<section class="card card--full">
+    <header class="card__header">
+        <div>
+            <h2>Clientes e créditos (prévia)</h2>
+            <p>Gerencie usuários que futuramente terão acesso ao painel online e terão créditos debitados a cada tarefa concluída.</p>
+        </div>
+    </header>
+    <div class="card__body card__body--split">
+        <form class="user-form" data-user-form>
+            <h3>Novo cliente</h3>
+            <label>
+                <span>Nome completo</span>
+                <input type="text" name="displayName" placeholder="Ex.: João Silva" required />
+            </label>
+            <label>
+                <span>Email</span>
+                <input type="email" name="email" placeholder="cliente@exemplo.com" required />
+            </label>
+            <label>
+                <span>Chave Rep4Rep (opcional)</span>
+                <input type="text" name="rep4repKey" placeholder="Cole aqui a chave fornecida ao cliente" />
+            </label>
+            <label>
+                <span>Créditos iniciais</span>
+                <input type="number" name="credits" min="0" value="10" />
+            </label>
+            <label>
+                <span>Notas</span>
+                <textarea name="notes" rows="3" placeholder="Observações internas sobre o cliente"></textarea>
+            </label>
+            <button type="submit" class="btn btn--primary">Cadastrar cliente</button>
+        </form>
+        <div class="user-list">
+            <div class="user-list__header">
+                <h3>Carteira atual</h3>
+                <p>Cadastre clientes e ajuste créditos conforme as compras forem confirmadas.</p>
+            </div>
+            <table class="user-table">
+                <thead>
+                    <tr>
+                        <th>Cliente</th>
+                        <th class="is-center">Créditos</th>
+                        <th class="is-right">Ações</th>
+                    </tr>
+                </thead>
+                <tbody data-users-body>
+                    <% if (initialUsers && initialUsers.length) { %>
+                        <% initialUsers.forEach(function(user) { %>
+                            <tr data-user-id="<%= user.id %>">
+                                <td>
+                                    <div class="user-identification">
+                                        <strong><%= user.displayName %></strong>
+                                        <span><%= user.email %></span>
+                                    </div>
+                                    <div class="user-meta">
+                                        <span class="badge badge--status badge--<%= user.status %>"><%= user.status %></span>
+                                        <% if (user.rep4repKey) { %>
+                                            <span class="badge">Key definida</span>
+                                        <% } else { %>
+                                            <span class="badge badge--muted">Key pendente</span>
+                                        <% } %>
+                                    </div>
+                                </td>
+                                <td class="is-center">
+                                    <span class="credit-count" data-user-credits><%= user.credits %></span>
+                                </td>
+                                <td class="is-right">
+                                    <div class="credit-actions">
+                                        <button type="button" class="btn btn--pill" data-credit-delta="-1">-1</button>
+                                        <button type="button" class="btn btn--pill" data-credit-delta="1">+1</button>
+                                        <button type="button" class="btn btn--pill" data-credit-delta="10">+10</button>
+                                    </div>
+                                </td>
+                            </tr>
+                        <% }) %>
+                    <% } else { %>
+                        <tr>
+                            <td colspan="3" class="is-center is-muted">Nenhum cliente cadastrado ainda.</td>
+                        </tr>
+                    <% } %>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</section>
+
+<div class="toast" data-toast hidden></div>
+
+<%- include('partials/layout-end', { includePanelScript: true }) %>
 <!DOCTYPE html>
 <html>
 <head>
