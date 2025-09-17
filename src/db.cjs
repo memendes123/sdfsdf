@@ -246,6 +246,9 @@ class DbWrapper extends EventEmitter {
       }
 
       let changeType = existingProfile ? 'profile.update' : 'profile.insert';
+      let dbWriteResult = null;
+      if (existingProfile) {
+        dbWriteResult = await this.db.run(
       let result = null;
 
       if (existingProfile) {
@@ -257,6 +260,7 @@ class DbWrapper extends EventEmitter {
         );
       } else {
         try {
+          dbWriteResult = await this.db.run(
           result = await this.db.run(
             `INSERT INTO steamprofile (username, password, sharedSecret, steamId, cookies)
              VALUES (?, ?, ?, ?, ?)`,
@@ -274,6 +278,7 @@ class DbWrapper extends EventEmitter {
             if (conflicting) {
               existingProfile = conflicting;
               changeType = 'profile.update';
+              dbWriteResult = await this.db.run(
               result = await this.db.run(
                 `UPDATE steamprofile
                    SET username = ?, password = ?, sharedSecret = ?, steamId = ?, cookies = ?
@@ -295,6 +300,15 @@ class DbWrapper extends EventEmitter {
           }
         }
       }
+
+      console.log(`✅ Perfil ${username} adicionado/atualizado.`);
+      if (dbWriteResult?.changes > 0) {
+        const steamRef = steamId || existingProfile?.steamId || null;
+        this._emitChange({ type: changeType, username, steamId: steamRef });
+      }
+
+      await this.checkpoint('PASSIVE');
+      return dbWriteResult;
 
       console.log(`✅ Perfil ${username} adicionado/atualizado.`);
       if (result?.changes > 0) {

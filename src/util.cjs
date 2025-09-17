@@ -69,6 +69,17 @@ function resolveApiToken(token, { fallbackToEnv = true } = {}) {
   return envToken || null;
 }
 
+function resolveClientApiToken(client, options = {}) {
+  if (!client) {
+    return null;
+  }
+
+  const role = typeof client.role === 'string' ? client.role : '';
+  const allowFallback =
+    options.fallbackToEnv ?? (role && role.toLowerCase() !== 'customer');
+  return resolveApiToken(client.rep4repKey, { fallbackToEnv: Boolean(allowFallback) });
+}
+
 const normalizedEnvToken = normalizeApiToken(process.env.REP4REP_KEY);
 if (normalizedEnvToken) {
   process.env.REP4REP_KEY = normalizedEnvToken;
@@ -1357,6 +1368,8 @@ async function prioritizedAutoRun(options = {}) {
       );
     }
 
+    const jobApiToken = resolveClientApiToken(client);
+    if (!jobApiToken) {
     const allowEnvFallback = client?.role && client.role !== 'customer';
     const jobApiToken = resolveApiToken(client.rep4repKey, {
       fallbackToEnv: Boolean(allowEnvFallback),
@@ -2034,4 +2047,5 @@ module.exports = {
   announceQueueEvent,
   getEnvRep4RepKey,
   resolveApiToken,
+  resolveClientApiToken,
 };
