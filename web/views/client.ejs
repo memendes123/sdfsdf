@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title><%= title ? `${title} · ${siteName || 'Rep4Rep Control Center'}` : (siteName || 'Rep4Rep Control Center') %></title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/style.css" />
+</head>
+<body class="client-body">
+    <div class="client-shell">
+        <header class="client-header">
+            <div class="brand">
+                <span class="brand__logo">R4R</span>
+                <div>
+                    <p class="brand__name"><%= siteName || 'Rep4Rep Control Center' %></p>
+                    <p class="brand__subtitle">Área do cliente — acompanhe créditos e rode tarefas</p>
+                </div>
+            </div>
+            <button class="btn btn--ghost" type="button" data-logout hidden>Sair</button>
+        </header>
+
+        <main class="client-main">
+            <section class="card client-card" data-auth-section>
+                <div class="client-tabs">
+                    <button type="button" class="client-tab is-active" data-tab="login">Já tenho conta</button>
+                    <button type="button" class="client-tab" data-tab="register">Quero me registrar</button>
+                </div>
+                <form class="client-form" data-login-form>
+                    <h2>Entrar</h2>
+                    <p class="client-hint">Use o email ou username cadastrado pelo administrador.</p>
+                    <label>
+                        <span>Email ou username</span>
+                        <input type="text" name="identifier" placeholder="email@dominio.com ou usuario" required />
+                    </label>
+                    <label>
+                        <span>Senha</span>
+                        <input type="password" name="password" placeholder="Sua senha" required />
+                    </label>
+                    <button type="submit" class="btn btn--primary">Acessar painel</button>
+                </form>
+                <form class="client-form is-hidden" data-register-form>
+                    <h2>Criar conta</h2>
+                    <p class="client-hint">Preencha todos os campos. O administrador revisará e liberará créditos.</p>
+                    <label>
+                        <span>Nome completo</span>
+                        <input type="text" name="fullName" required />
+                    </label>
+                    <label>
+                        <span>Username</span>
+                        <input type="text" name="username" required />
+                    </label>
+                    <label>
+                        <span>Email</span>
+                        <input type="email" name="email" required />
+                    </label>
+                    <label>
+                        <span>Senha</span>
+                        <input type="password" name="password" minlength="8" required />
+                    </label>
+                    <label>
+                        <span>Data de nascimento</span>
+                        <input type="date" name="dateOfBirth" required />
+                    </label>
+                    <label>
+                        <span>Discord ID</span>
+                        <input type="text" name="discordId" placeholder="usuario#0000 ou ID numérico" required />
+                    </label>
+                    <label>
+                        <span>Rep4Rep ID</span>
+                        <input type="text" name="rep4repId" required />
+                    </label>
+                    <label>
+                        <span>Telefone / WhatsApp (com DDI)</span>
+                        <input type="tel" name="phoneNumber" placeholder="+351900000000" required />
+                    </label>
+                    <p class="client-smallprint">Ao enviar você confirma que leu e aceita os termos de uso fornecidos pelo administrador.</p>
+                    <button type="submit" class="btn btn--primary">Enviar cadastro</button>
+                </form>
+            </section>
+
+            <section class="client-dashboard is-hidden" data-dashboard>
+                <article class="card client-summary">
+                    <header>
+                        <h2>Resumo da conta</h2>
+                        <span class="badge" data-client-status>--</span>
+                    </header>
+                    <dl class="client-info">
+                        <div>
+                            <dt>Nome</dt>
+                            <dd data-client-name>--</dd>
+                        </div>
+                        <div>
+                            <dt>Email</dt>
+                            <dd data-client-email>--</dd>
+                        </div>
+                        <div>
+                            <dt>Discord ID</dt>
+                            <dd data-client-discord>--</dd>
+                        </div>
+                        <div>
+                            <dt>Rep4Rep ID</dt>
+                            <dd data-client-rep4rep>--</dd>
+                        </div>
+                        <div>
+                            <dt>Telefone</dt>
+                            <dd data-client-phone>--</dd>
+                        </div>
+                        <div>
+                            <dt>Créditos disponíveis</dt>
+                            <dd class="client-credits" data-client-credits>0</dd>
+                        </div>
+                    </dl>
+                    <p class="client-hint" data-client-status-hint></p>
+                </article>
+
+                <article class="card client-actions">
+                    <h2>Key Rep4Rep e execução</h2>
+                    <form class="client-inline" data-key-form>
+                        <label>
+                            <span>Sua chave Rep4Rep</span>
+                            <input type="text" name="rep4repKey" placeholder="Cole aqui a key fornecida pelo Rep4Rep" />
+                        </label>
+                        <button type="submit" class="btn btn--secondary">Guardar key</button>
+                    </form>
+                    <div class="client-run">
+                        <p>Quando você clica em “Rodar tarefas” cada comentário consome 1 crédito. Ao chegar em zero, o bot pausa automaticamente.</p>
+                        <button type="button" class="btn btn--primary" data-run-button disabled>▶️ Rodar tarefas</button>
+                    </div>
+                    <pre class="client-output" data-run-output>Faça login e cadastre sua key para executar.</pre>
+                </article>
+            </section>
+        </main>
+        <div class="toast" data-client-toast hidden></div>
+    </div>
+    <script src="/client.js" defer></script>
+</body>
+</html>

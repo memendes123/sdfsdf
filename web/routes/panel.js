@@ -25,6 +25,7 @@ router.use((req, res, next) => {
     res.set('WWW-Authenticate', 'Basic realm="Painel Rep4Rep"');
     return res.status(401).send('Auth required.');
   }
+  res.locals.baseUrl = req.baseUrl || '';
   next();
 });
 
@@ -81,7 +82,7 @@ router.get('/logs', (req, res) => {
   });
 });
 
-router.post('/api/admin/run', async (req, res) => {
+router.post('/api/run', async (req, res) => {
   const { command } = req.body || {};
 
   if (!command) {
@@ -120,7 +121,7 @@ router.post('/api/admin/run', async (req, res) => {
   }
 });
 
-router.get('/api/admin/stats', async (req, res) => {
+router.get('/api/stats', async (req, res) => {
   try {
     const stats = await collectUsageStats();
     res.json({ success: true, stats });
@@ -130,7 +131,7 @@ router.get('/api/admin/stats', async (req, res) => {
   }
 });
 
-router.get('/api/admin/users', async (req, res) => {
+router.get('/api/users', async (req, res) => {
   try {
     const users = await userStore.listUsers();
     res.json({ success: true, users });
@@ -140,7 +141,7 @@ router.get('/api/admin/users', async (req, res) => {
   }
 });
 
-router.post('/api/admin/users', async (req, res) => {
+router.post('/api/users', async (req, res) => {
   try {
     const user = await userStore.createUser(req.body || {});
     res.status(201).json({ success: true, user });
@@ -149,7 +150,7 @@ router.post('/api/admin/users', async (req, res) => {
   }
 });
 
-router.patch('/api/admin/users/:id', async (req, res) => {
+router.patch('/api/users/:id', async (req, res) => {
   const { id } = req.params;
   try {
     const user = await userStore.updateUser(id, req.body || {});
@@ -160,7 +161,7 @@ router.patch('/api/admin/users/:id', async (req, res) => {
   }
 });
 
-router.post('/api/admin/users/:id/credits', async (req, res) => {
+router.post('/api/users/:id/credits', async (req, res) => {
   const { id } = req.params;
   const { delta } = req.body || {};
 

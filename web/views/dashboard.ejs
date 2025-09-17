@@ -2,12 +2,13 @@
 <section class="hero">
     <div class="hero__content">
         <h1>Centro de Controle Rep4Rep</h1>
-        <p>Automatize comentários, monitore contas e prepare o terreno para vender créditos gerenciados com as suas contas Steam.</p>
+        <p>Automatize comentários, monitore contas e distribua créditos para clientes conectados à sua rede Rep4Rep.</p>
         <div class="hero__actions">
             <button class="btn btn--primary" data-command="autoRun">▶️ Executar autoRun</button>
             <button class="btn btn--secondary" data-command="backup">💾 Criar backup</button>
-            <a class="btn btn--ghost" href="/logs">📜 Ver logs</a>
+            <a class="btn btn--ghost" href="<%= base %>/logs">📜 Ver logs</a>
         </div>
+            <p class="hero__hint">Dica: configure o arquivo <code>accounts.txt</code>, mantenha o bot do terminal rodando com a sua key e libere créditos apenas após validar os dados do cliente.</p>
         <p class="hero__hint">Dica: configure o arquivo <code>accounts.txt</code> e garanta que o <code>REP4REP_KEY</code> está definido antes de rodar as automações.</p>
     </div>
     <aside class="hero__card">
@@ -76,11 +77,35 @@
             <h3>Novo cliente</h3>
             <label>
                 <span>Nome completo</span>
-                <input type="text" name="displayName" placeholder="Ex.: João Silva" required />
+                <input type="text" name="fullName" placeholder="Ex.: João Silva" required />
+            </label>
+            <label>
+                <span>Username</span>
+                <input type="text" name="username" placeholder="apelido para login" required />
             </label>
             <label>
                 <span>Email</span>
                 <input type="email" name="email" placeholder="cliente@exemplo.com" required />
+            </label>
+            <label>
+                <span>Senha provisória</span>
+                <input type="password" name="password" placeholder="Envie ao cliente e peça para trocar" minlength="8" required />
+            </label>
+            <label>
+                <span>Data de nascimento</span>
+                <input type="date" name="dateOfBirth" required />
+            </label>
+            <label>
+                <span>Discord ID</span>
+                <input type="text" name="discordId" placeholder="usuario#0000 ou ID numérico" required />
+            </label>
+            <label>
+                <span>Rep4Rep ID</span>
+                <input type="text" name="rep4repId" placeholder="ID único do Rep4Rep" required />
+            </label>
+            <label>
+                <span>Telefone / WhatsApp</span>
+                <input type="tel" name="phoneNumber" placeholder="+351900000000" required />
             </label>
             <label>
                 <span>Chave Rep4Rep (opcional)</span>
@@ -90,16 +115,12 @@
                 <span>Créditos iniciais</span>
                 <input type="number" name="credits" min="0" value="10" />
             </label>
-            <label>
-                <span>Notas</span>
-                <textarea name="notes" rows="3" placeholder="Observações internas sobre o cliente"></textarea>
-            </label>
             <button type="submit" class="btn btn--primary">Cadastrar cliente</button>
         </form>
         <div class="user-list">
             <div class="user-list__header">
                 <h3>Carteira atual</h3>
-                <p>Cadastre clientes e ajuste créditos conforme as compras forem confirmadas.</p>
+                <p>Cadastre clientes, valide identidades e ajuste créditos conforme as compras forem confirmadas.</p>
             </div>
             <table class="user-table">
                 <thead>
@@ -115,11 +136,24 @@
                             <tr data-user-id="<%= user.id %>">
                                 <td>
                                     <div class="user-identification">
-                                        <strong><%= user.displayName %></strong>
+                                        <strong><%= user.fullName || user.displayName || user.username %></strong>
                                         <span><%= user.email %></span>
                                     </div>
                                     <div class="user-meta">
                                         <span class="badge badge--status badge--<%= ['active','blocked','pending'].includes(user.status) ? user.status : 'muted' %>"><%= user.status %></span>
+                                        <% if (user.username) { %>
+                                            <span class="badge badge--muted">@<%= user.username %></span>
+                                        <% } %>
+                                        <% if (user.discordId) { %>
+                                            <span class="badge badge--muted">Discord: <%= user.discordId %></span>
+                                        <% } %>
+                                        <% if (user.rep4repId) { %>
+                                            <span class="badge badge--muted">Rep4Rep: <%= user.rep4repId %></span>
+                                        <% } %>
+                                        <% if (user.phoneNumber) { %>
+                                            <span class="badge badge--muted"><%= user.phoneNumber %></span>
+                                        <% } %>
+
                                         <% if (user.rep4repKey) { %>
                                             <span class="badge">Key definida</span>
                                         <% } else { %>

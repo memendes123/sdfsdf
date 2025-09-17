@@ -1,4 +1,7 @@
 (function () {
+  const panelBase = window.__PANEL_BASE__ || '';
+  const buildUrl = (path) => `${panelBase}${path}`;
+
   const outputEl = document.querySelector('[data-command-output]');
   const toastEl = document.querySelector('[data-toast]');
   const userTableBody = document.querySelector('[data-users-body]');
@@ -74,7 +77,7 @@
       const identification = document.createElement('div');
       identification.className = 'user-identification';
       const strong = document.createElement('strong');
-      strong.textContent = user.displayName;
+      strong.textContent = user.fullName || user.displayName || user.username;
       const email = document.createElement('span');
       email.textContent = user.email;
       identification.appendChild(strong);
@@ -91,6 +94,27 @@
       statusBadge.textContent = statusLabel(user.status);
       meta.appendChild(statusBadge);
 
+      if (user.username) {
+        const usernameBadge = document.createElement('span');
+        usernameBadge.className = 'badge badge--muted';
+        usernameBadge.textContent = `@${user.username}`;
+        meta.appendChild(usernameBadge);
+      }
+
+      if (user.discordId) {
+        const discordBadge = document.createElement('span');
+        discordBadge.className = 'badge badge--muted';
+        discordBadge.textContent = `Discord: ${user.discordId}`;
+        meta.appendChild(discordBadge);
+      }
+
+      if (user.rep4repId) {
+        const repBadge = document.createElement('span');
+        repBadge.className = 'badge badge--muted';
+        repBadge.textContent = `Rep4Rep ID: ${user.rep4repId}`;
+        meta.appendChild(repBadge);
+      }
+
       const keyBadge = document.createElement('span');
       if (user.rep4repKey) {
         keyBadge.className = 'badge';
@@ -101,11 +125,11 @@
       }
       meta.appendChild(keyBadge);
 
-      if (user.notes) {
-        const notesBadge = document.createElement('span');
-        notesBadge.className = 'badge badge--muted';
-        notesBadge.textContent = 'Notas adicionadas';
-        meta.appendChild(notesBadge);
+      if (user.phoneNumber) {
+        const phoneBadge = document.createElement('span');
+        phoneBadge.className = 'badge badge--muted';
+        phoneBadge.textContent = user.phoneNumber;
+        meta.appendChild(phoneBadge);
       }
 
       nameCell.appendChild(identification);
@@ -145,7 +169,7 @@
 
   async function refreshStats() {
     try {
-      const res = await fetch('/api/admin/stats');
+      const res = await fetch(buildUrl('/api/stats'));
       if (!res.ok) throw new Error('Falha ao atualizar estatísticas.');
       const data = await res.json();
       if (data?.stats) {
@@ -160,7 +184,7 @@
   async function refreshUsers() {
     if (!userTableBody) return;
     try {
-      const res = await fetch('/api/admin/users');
+      const res = await fetch(buildUrl('/api/users'));
       if (!res.ok) throw new Error('Falha ao carregar usuários.');
       const data = await res.json();
       renderUsers(data.users || []);
@@ -175,7 +199,7 @@
     const payload = { command };
     try {
       if (button) button.disabled = true;
-      const res = await fetch('/api/admin/run', {
+      const res = await fetch(buildUrl('/api/run'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -249,7 +273,7 @@
       }
       try {
         userForm.querySelector('button[type="submit"]').disabled = true;
-        const res = await fetch('/api/admin/users', {
+        const res = await fetch(buildUrl('/api/users'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -281,7 +305,7 @@
 
       try {
         button.disabled = true;
-        const res = await fetch(`/api/admin/users/${encodeURIComponent(userId)}/credits`, {
+        const res = await fetch(buildUrl(`/api/users/${encodeURIComponent(userId)}/credits`), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ delta }),

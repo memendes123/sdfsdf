@@ -5,12 +5,19 @@ const userStore = require('../services/userStore');
 const { autoRun, collectUsageStats } = require('../../src/util.cjs');
 
 function extractAuth(req) {
+  const authHeader = req.header('authorization');
+  const bearerToken = authHeader && authHeader.toLowerCase().startsWith('bearer ')
+    ? authHeader.slice(7).trim()
+    : null;
+
   const userId =
     req.header('x-user-id') ||
     req.body?.userId ||
     req.query?.userId ||
     null;
   const token =
+    bearerToken ||
+
     req.header('x-user-token') ||
     req.body?.token ||
     req.body?.apiToken ||
@@ -19,11 +26,58 @@ function extractAuth(req) {
   return { userId: userId ? String(userId) : null, token: token ? String(token) : null };
 }
 
+router.post('/register', async (req, res) => {
+  try {
+    const user = await userStore.registerUser(req.body || {});
+    res.status(201).json({
+      success: true,
+      message: 'Cadastro enviado. Ative o cliente atribuindo créditos e status ativo.',
+      user: {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        status: user.status,
+      },
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, error: error.message });
+  }
+});
+
+router.post('/login', async (req, res) => {
+  const { identifier, email, username, password } = req.body || {};
+  const loginIdentifier = identifier || email || username;
+  try {
+    const user = await userStore.loginUser({ identifier: loginIdentifier, password });
+    res.json({
+      success: true,
+      token: user.apiToken,
+      user: {
+        id: user.id,
+        username: user.username,
+        fullName: user.fullName,
+        email: user.email,
+        credits: user.credits,
+        status: user.status,
+        role: user.role,
+        discordId: user.discordId,
+        rep4repId: user.rep4repId,
+        rep4repKey: user.rep4repKey,
+        phoneNumber: user.phoneNumber,
+        dateOfBirth: user.dateOfBirth,
+      },
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, error: error.message });
+  }
+});
+
 router.use(async (req, res, next) => {
   try {
     const { userId, token } = extractAuth(req);
     const user = await userStore.authenticateUser({ userId, token });
     if (!user) {
+      return res.status(401).json({ success: false, error: 'Credenciais inválidas ou conta inativa.' });
       return res.status(401).json({ success: false, error: 'Credenciais inválidas.' });
     }
     req.user = user;
@@ -39,11 +93,37 @@ router.get('/me', async (req, res) => {
     success: true,
     user: {
       id: user.id,
+      username: user.username,
+      fullName: user.fullName,
       displayName: user.displayName,
       email: user.email,
       credits: user.credits,
       status: user.status,
       role: user.role,
+      discordId: user.discordId,
+      rep4repId: user.rep4repId,
+      rep4repKey: user.rep4repKey,
+      phoneNumber: user.phoneNumber,
+      dateOfBirth: user.dateOfBirth,
+      lastLoginAt: user.lastLoginAt,
+    },
+  });
+});
+
+router.patch('/me', async (req, res) => {
+  const { rep4repKey } = req.body || {};
+  if (rep4repKey === undefined) {
+    return res.status(400).json({ success: false, error: 'Nada para atualizar.' });
+  }
+
+  try {
+    const updated = await userStore.updateRep4repKey(req.user.id, rep4repKey);
+    res.json({ success: true, user: { ...updated, apiToken: undefined } });
+  } catch (error) {
+    res.status(400).json({ success: false, error: error.message });
+  }
+});
+
       rep4repKey: user.rep4repKey,
     },
   });
@@ -63,6 +143,10 @@ router.post('/run', async (req, res) => {
     } catch (error) {
       return res.status(500).json({ success: false, error: error.message });
     }
+  }
+
+  if (req.user.status !== 'active') {
+    return res.status(403).json({ success: false, error: 'Conta ainda não ativada. Aguarde a liberação pelo administrador.' });
   }
 
   if (req.user.credits <= 0) {

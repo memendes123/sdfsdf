@@ -587,6 +587,191 @@ a {
   padding-bottom: 12px;
 }
 
+.client-body {
+  background: var(--bg);
+  min-height: 100vh;
+}
+
+.client-shell {
+  width: min(960px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.client-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 18px;
+  padding: 20px 28px;
+  backdrop-filter: blur(14px);
+}
+
+.client-main {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.client-card {
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 18px;
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.client-tabs {
+  display: inline-flex;
+  background: rgba(148, 163, 184, 0.1);
+  border-radius: 999px;
+  padding: 6px;
+  gap: 6px;
+  align-self: flex-start;
+}
+
+.client-tab {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 8px 16px;
+  border-radius: 999px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.client-tab.is-active {
+  background: var(--accent-muted);
+  color: var(--accent);
+}
+
+.client-form {
+  display: grid;
+  gap: 16px;
+}
+
+.client-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.client-form input {
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 10px;
+  padding: 10px 14px;
+  color: var(--text);
+}
+
+.client-form input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.25);
+}
+
+.client-hint {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  margin: 0;
+}
+
+.client-smallprint {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  margin: -4px 0 0;
+}
+
+.client-dashboard {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 24px;
+}
+
+.client-summary header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.client-info {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+  margin: 0;
+}
+
+.client-info div {
+  background: rgba(148, 163, 184, 0.08);
+  border-radius: 12px;
+  padding: 12px 14px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.client-info dt {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.client-info dd {
+  margin: 4px 0 0;
+  font-size: 1rem;
+}
+
+.client-credits {
+  font-size: 1.4rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.client-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.client-inline {
+  display: grid;
+  gap: 12px;
+}
+
+.client-inline input {
+  width: 100%;
+}
+
+.client-run {
+  background: rgba(8, 145, 178, 0.08);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.client-output {
+  background: rgba(15, 23, 42, 0.8);
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  padding: 16px;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  color: var(--text);
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.is-hidden {
+  display: none !important;
+}
+
 @media (max-width: 768px) {
   body {
     padding: 16px;
@@ -609,7 +794,8 @@ a {
   .hero__content,
   .hero__card,
   .card,
-  .user-form {
+  .user-form,
+  .client-card {
     padding: 20px;
   }
 
@@ -620,10 +806,22 @@ a {
   .credit-actions {
     justify-content: flex-start;
   }
+
+  .client-shell {
+    gap: 16px;
+  }
+
+  .client-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 16px;
+  }
+
+  .client-dashboard {
+    grid-template-columns: 1fr;
+  }
+
+  .client-inline {
+    grid-template-columns: 1fr;
+  }
 }
-body { font-family: Arial; margin: 30px; }
-ul { list-style-type: none; padding: 0; }
-li { margin: 10px 0; }
-a { text-decoration: none; color: #2c3e50; font-weight: bold; }
-p { color: #4a4a4a; max-width: 520px; }
-pre { background: #f5f5f5; padding: 12px; border-radius: 6px; overflow-x: auto; }
