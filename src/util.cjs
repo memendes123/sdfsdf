@@ -57,6 +57,26 @@ function removeFromAccountsFile(username) {
     fs.writeFileSync(filePath, filtered.join('\n'));
 }
 
+function parseStoredCookies(rawCookies, username) {
+    if (!rawCookies) {
+        return [];
+    }
+
+    if (typeof rawCookies === 'string') {
+        try {
+            const parsed = JSON.parse(rawCookies);
+            return Array.isArray(parsed) ? parsed : [];
+        } catch (error) {
+            if (username) {
+                log(`[${username}] Failed to parse stored cookies. Ignorando cookies salvos.`);
+            }
+            return [];
+        }
+    }
+
+    return Array.isArray(rawCookies) ? rawCookies : [];
+}
+
 async function autoRun() {
     const accounts = fs.readFileSync('accounts.txt', 'utf-8').split('\n').filter(Boolean);
     let profiles = await db.getAllProfiles();
@@ -193,29 +213,56 @@ async function autoRunComments(profile, client, tasks, authorSteamProfileId, max
     log(`[${profile.username}] done with posting comments. Total comments posted: ${commentsPosted}`, true);
 }
 
-async function loginWithRetries(client, username, password, sharedSecret, cookies, maxRetries = 3) {
-    let attempts = 0;
+async function loginWithRetries(client, profileOrUsername, password, sharedSecret, cookies, maxRetries = 3) {
+    let username;
+    let pass;
+    let secret;
+    let storedCookies;
+
+    if (profileOrUsername && typeof profileOrUsername === 'object' && !Array.isArray(profileOrUsername)) {
+        ({ username, password: pass, sharedSecret: secret, cookies: storedCookies } = profileOrUsername);
+        if (typeof password !== 'undefined' || typeof sharedSecret !== 'undefined' || typeof cookies !== 'undefined') {
+            // Avoid accidental mixed usage of the API
+            log('loginWithRetries recebeu objeto de perfil e parâmetros adicionais. Ignorando parâmetros extras.');
+        }
+    } else {
+        username = profileOrUsername;
+        pass = password;
+        secret = sharedSecret;
+        storedCookies = cookies;
+    }
+
+    if (!username || !pass) {
+        throw new Error('Credenciais inválidas: username e password são obrigatórios.');
+    }
+
+    const parsedCookies = parseStoredCookies(storedCookies, username);
     let fatalError = null;
 
-    while (attempts < maxRetries) {
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+        const cookiePayload = attempt === 0 && parsedCookies.length > 0 ? parsedCookies : null;
+
         try {
-            await client.steamLogin(username, password, null, sharedSecret, null, JSON.parse(cookies));
-            if (client.status === 4 || await client.isLoggedIn()) {
+            await client.steamLogin(username, pass, null, secret, null, cookiePayload);
+            const isLoggedIn = client.status === statusMessage.loggedIn || await client.isLoggedIn();
+            if (isLoggedIn) {
                 log(`[${username}] login successful`);
-                return;
+                return true;
+            }
+
+            if ([
+                statusMessage.steamGuardRequired,
+                statusMessage.steamGuardMobileRequired,
+                statusMessage.captchaRequired
+            ].includes(client.status)) {
+                log(`[${username}] login requires manual verification (status: ${client.status}).`);
+                return false;
             }
         } catch (error) {
             const msg = error.message || '';
-            log(`[${username}] login attempt ${attempts + 1} failed: ${msg}`);
+            log(`[${username}] login attempt ${attempt + 1} failed: ${msg}`);
 
-            if (
-                msg.includes('Invalid') ||
-                msg.includes('denied') ||
-                msg.includes('banned') ||
-                msg.includes('RateLimit') ||
-                msg.includes('Throttle') ||
-                msg.includes('too many')
-            ) {
+            if (/Invalid|denied|banned|RateLimit|Throttle|too many/i.test(msg)) {
                 fatalError = msg;
                 break;
             }
@@ -223,23 +270,30 @@ async function loginWithRetries(client, username, password, sharedSecret, cookie
             if (error.code === 502) {
                 log(`[${username}] WebAPI error 502. Retrying...`);
                 await sleep(10000);
+            } else if (attempt < maxRetries - 1) {
+                await sleep(5000);
             } else {
                 throw error;
             }
         }
-        attempts++;
     }
 
     if (fatalError) {
         log(`[${username}] login failed permanently: ${fatalError}`);
         logInvalidAccount(username, fatalError);
 
-        const profile = await db.getAllProfiles().then(p => p.find(p => p.username === username));
-        if (profile?.steamId) await removeFromRep4Rep(profile.steamId);
+        try {
+            const profile = (await db.getAllProfiles()).find(p => p.username === username);
+            if (profile?.steamId) {
+                await removeFromRep4Rep(profile.steamId);
+            }
+        } catch (err) {
+            log(`[${username}] Falha ao buscar perfil para remoção: ${err.message}`);
+        }
 
         await db.removeProfile(username);
         removeFromAccountsFile(username);
-        return;
+        return false;
     }
 
     throw new Error(`[${username}] login failed after ${maxRetries} attempts.`);
@@ -257,30 +311,31 @@ async function authAllProfiles() {
     for (const [i, profile] of profiles.entries()) {
         log(`Attempting to auth: ${profile.username} (${profile.steamId})`);
         let client = steamBot();
-        await loginWithRetries(client, profile);
-        if (client.status !== 4 && !await client.isLoggedIn()) {
-            let code = await client.getSteamGuardCode(profile.sharedSecret);
-            switch (client.status) {
-                case 1:
-                    await client.steamLogin(profile.username, profile.password, code);
-                    break;
-                case 2:
-                    await client.steamLogin(profile.username, profile.password, null, code);
-                    break;
-                case 3:
-                    await client.steamLogin(profile.username, profile.password, null, null, code);
-                    break;
-            }
+        let loggedIn = false;
+        try {
+            loggedIn = await loginWithRetries(client, profile);
+        } catch (error) {
+            log(`[${profile.username}] Falha ao autenticar: ${error.message}`, true);
+            continue;
+        }
+
+        if (!loggedIn) {
+            log(`[${profile.username}] Requer verificação manual. Pulando perfil.`, true);
+            continue;
         }
 
         log(`[${profile.username}] Authorized`);
 
-        let res = await syncWithRep4rep(client);
-        if (res === true || res === 'Steam profile already added/exists on rep4rep.') {
-            log(`[${profile.username}] Synced to Rep4Rep`, true);
-        } else {
-            log(`[${profile.username}] Failed to sync:`);
-            log(res, true);
+        try {
+            let res = await syncWithRep4rep(client);
+            if (res === true || res === 'Steam profile already added/exists on rep4rep.') {
+                log(`[${profile.username}] Synced to Rep4Rep`, true);
+            } else {
+                log(`[${profile.username}] Failed to sync:`);
+                log(res, true);
+            }
+        } catch (error) {
+            log(`[${profile.username}] Erro ao sincronizar: ${error.message}`, true);
         }
 
         if (i !== profiles.length - 1) {
@@ -297,7 +352,6 @@ async function syncWithRep4rep(client) {
 
     try {
         steamProfiles = await api.getSteamProfiles();
-        console.log("steamProfiles:", steamProfiles); // Add this log to inspect the retrieved profiles
     } catch (error) {
         console.error("Error retrieving steamProfiles:", error);
         return `Error retrieving steamProfiles: ${error.message}`;
@@ -348,19 +402,33 @@ async function addProfileSetup(accountName, password, sharedSecret) {
         try {
             await client.steamLogin(accountName, password, null, sharedSecret, null);
 
-            if (client.status !== 4 && !await client.isLoggedIn()) {
-                let code = await client.getSteamGuardCode(sharedSecret);
-                switch (client.status) {
-                    case 1:
-                        await addProfileSetup(accountName, password, code);
-                        return;
-                    case 2:
-                        await addProfileSetup(accountName, password, null, code);
-                        return;
-                    case 3:
-                        await addProfileSetup(accountName, password, null, null, code);
-                        return;
+            let loggedIn = client.status === statusMessage.loggedIn || await client.isLoggedIn();
+
+            if (!loggedIn) {
+                if (client.status === statusMessage.steamGuardRequired) {
+                    const code = await promptForCode(accountName, client);
+                    if (!code) {
+                        throw new Error('Steam Guard code não informado.');
+                    }
+                    await client.steamLogin(accountName, password, code, sharedSecret, null);
+                    loggedIn = client.status === statusMessage.loggedIn || await client.isLoggedIn();
+                } else if (client.status === statusMessage.captchaRequired) {
+                    const captcha = await promptForCode(accountName, client);
+                    if (!captcha) {
+                        throw new Error('Captcha não informado.');
+                    }
+                    await client.steamLogin(accountName, password, null, sharedSecret, captcha);
+                    loggedIn = client.status === statusMessage.loggedIn || await client.isLoggedIn();
+                } else if (client.status === statusMessage.steamGuardMobileRequired) {
+                    log(`[${accountName}] Aguardando novo código do Steam Guard Mobile...`);
+                    attempts++;
+                    await sleep(30000);
+                    continue;
                 }
+            }
+
+            if (!loggedIn) {
+                throw new Error('Não foi possível autenticar o perfil.');
             }
 
             let res = await syncWithRep4rep(client);
@@ -375,12 +443,15 @@ async function addProfileSetup(accountName, password, sharedSecret) {
             success = true;
         } catch (error) {
             attempts++;
-            if (error.message.includes('RateLimitExceeded')) {
+            const errorMessage = error?.message || String(error);
+            if (errorMessage.includes('RateLimitExceeded')) {
                 log(`Rate limit exceeded for ${accountName}. Waiting before retrying...`);
                 await sleep(30000); // wait 1 minute before retrying
             } else {
-                log(`Error adding profile ${accountName}: ${error.message}`);
-                break;
+                log(`Error adding profile ${accountName}: ${errorMessage}`);
+                if (attempts < maxAttempts) {
+                    await sleep(5000);
+                }
             }
         }
     }
@@ -500,11 +571,21 @@ async function checkAndSyncProfiles() {
     for (const profile of profiles) {
         log(`Verifying and syncing: ${profile.username} (${profile.steamId})`);
         let client = steamBot();
-        let res = await syncWithRep4rep(client);
-        if (res === true || res === 'Steam profile already added/exists on rep4rep.') {
-            log(`[${profile.username}] Synced to Rep4Rep`);
-        } else {
-            log(`[${profile.username}] Failed to sync: ${res}`);
+        try {
+            const loggedIn = await loginWithRetries(client, profile);
+            if (!loggedIn) {
+                log(`[${profile.username}] Não foi possível autenticar para sincronização.`);
+                continue;
+            }
+
+            let res = await syncWithRep4rep(client);
+            if (res === true || res === 'Steam profile already added/exists on rep4rep.') {
+                log(`[${profile.username}] Synced to Rep4Rep`);
+            } else {
+                log(`[${profile.username}] Failed to sync: ${res}`);
+            }
+        } catch (error) {
+            log(`[${profile.username}] Erro ao sincronizar: ${error.message}`);
         }
     }
     log('Check and sync completed');
@@ -525,7 +606,15 @@ async function verifyProfileStatus() {
     for (const profile of profiles) {
         const client = steamBot();
         try {
-            await client.steamLogin(profile.username, profile.password, null, profile.sharedSecret, null, JSON.parse(profile.cookies));
+            const cookies = parseStoredCookies(profile.cookies, profile.username);
+            await client.steamLogin(
+                profile.username,
+                profile.password,
+                null,
+                profile.sharedSecret,
+                null,
+                cookies.length ? cookies : null
+            );
             const isLoggedIn = client.status === 4 || await client.isLoggedIn();
             log(`[${profile.username}] ${isLoggedIn ? '✅ Logado' : '❌ Não logado'}`);
         } catch (err) {
@@ -582,9 +671,14 @@ async function resetProfileCookies() {
     for (const profile of profiles) {
         const client = steamBot();
         try {
-            await client.steamLogin(profile.username, profile.password, null, profile.sharedSecret, null);
+            const loggedIn = await loginWithRetries(client, profile);
+            if (!loggedIn) {
+                log(`[${profile.username}] Não foi possível autenticar para atualizar cookies.`);
+                continue;
+            }
+
             const cookies = await client.getCookies();
-            await db.updateCookies(profile.username, JSON.stringify(cookies));
+            await db.updateCookies(profile.username, cookies);
             log(`[${profile.username}] Cookies atualizados`);
         } catch (err) {
             log(`[${profile.username}] Falha ao resetar cookies: ${err.message}`);
@@ -593,7 +687,7 @@ async function resetProfileCookies() {
 }
 
 function backupDatabase() {
-    const src = path.join(__dirname, '..', 'db.sqlite');
+    const src = db.getDatabasePath();
     const destDir = path.join(__dirname, '..', 'backups');
     const timestamp = new Date().toISOString().replace(/:/g, '-');
     if (!fs.existsSync(destDir)) fs.mkdirSync(destDir);
@@ -619,7 +713,7 @@ module.exports = {
     addProfilesAndRun,
     checkAndSyncProfiles,
     checkCommentAvailability,
-	verifyProfileStatus,
+    verifyProfileStatus,
     exportProfilesToCSV,
     clearInvalidAccounts,
     usageStats,

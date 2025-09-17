@@ -1,20 +1,44 @@
+const path = require('path');
 const sqlite3 = require('sqlite3').verbose();
 const { open } = require('sqlite');
 
 class DbWrapper {
   constructor() {
     this.db = null;
+    this._initPromise = null;
+    this.databasePath = path.join(__dirname, '..', 'steamprofiles.db');
   }
 
   async init() {
-    this.db = await open({
-      filename: './steamprofiles.db',
-      driver: sqlite3.Database
-    });
+    if (this.db) {
+      return this.db;
+    }
 
-    await this._createProfilesTable();
-    await this._createCommentsTable();
-    console.log("📦 Banco de dados inicializado.");
+    if (!this._initPromise) {
+      this._initPromise = (async () => {
+        const database = await open({
+          filename: this.databasePath,
+          driver: sqlite3.Database
+        });
+
+        this.db = database;
+        await this._createProfilesTable();
+        await this._createCommentsTable();
+        console.log("📦 Banco de dados inicializado.");
+        return this.db;
+      })().catch((err) => {
+        this._initPromise = null;
+        throw err;
+      });
+    }
+
+    return this._initPromise;
+  }
+
+  async _ensureReady() {
+    if (!this.db) {
+      await this.init();
+    }
   }
 
   async _createProfilesTable() {
@@ -23,14 +47,21 @@ class DbWrapper {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT,
         password TEXT,
+        sharedSecret TEXT,
         steamId TEXT UNIQUE,
         cookies TEXT,
         lastComment DATETIME
       )
     `);
+
+    const columns = await this.db.all(`PRAGMA table_info(steamprofile)`);
+    if (!columns.some((column) => column.name === 'sharedSecret')) {
+      await this.db.exec(`ALTER TABLE steamprofile ADD COLUMN sharedSecret TEXT`);
+    }
   }
 
   async _createCommentsTable() {
+    await this._ensureReady();
     await this.db.exec(`
       CREATE TABLE IF NOT EXISTS comments (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -40,16 +71,21 @@ class DbWrapper {
     `);
   }
 
-  async addOrUpdateProfile(username, password, steamId, cookies) {
+  async addOrUpdateProfile(username, password, sharedSecret, steamId, cookies) {
+    await this._ensureReady();
     try {
+      const serializedCookies = typeof cookies === 'string'
+        ? cookies
+        : JSON.stringify(cookies || []);
       const result = await this.db.run(`
-        INSERT INTO steamprofile (username, password, steamId, cookies)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO steamprofile (username, password, sharedSecret, steamId, cookies)
+        VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(steamId) DO UPDATE SET
           username = excluded.username,
           password = excluded.password,
+          sharedSecret = excluded.sharedSecret,
           cookies = excluded.cookies
-      `, [username, password, steamId, JSON.stringify(cookies)]);
+      `, [username, password, sharedSecret || null, steamId, serializedCookies]);
 
       console.log(`✅ Perfil ${username} adicionado/atualizado.`);
       return result;
@@ -59,6 +95,7 @@ class DbWrapper {
   }
 
   async removeProfile(username) {
+    await this._ensureReady();
     const result = await this.db.run(
       `DELETE FROM steamprofile WHERE username = ?`,
       [username]
@@ -74,10 +111,12 @@ class DbWrapper {
   }
 
   async getAllProfiles() {
+    await this._ensureReady();
     return await this.db.all(`SELECT * FROM steamprofile`);
   }
 
   async updateLastComment(steamId) {
+    await this._ensureReady();
     await this.db.run(`
       UPDATE steamprofile
       SET lastComment = DATETIME('now', 'localtime')
@@ -90,6 +129,7 @@ class DbWrapper {
   }
 
   async getCommentsInLast24Hours(steamId) {
+    await this._ensureReady();
     const result = await this.db.get(`
       SELECT COUNT(*) as count
       FROM comments
@@ -99,8 +139,24 @@ class DbWrapper {
     return result?.count || 0;
   }
 
+  async updateCookies(username, cookies) {
+    await this._ensureReady();
+    const serializedCookies = typeof cookies === 'string'
+      ? cookies
+      : JSON.stringify(cookies || []);
+    await this.db.run(
+      `UPDATE steamprofile SET cookies = ? WHERE username = ?`,
+      [serializedCookies, username]
+    );
+  }
+
+  getDatabasePath() {
+    return this.databasePath;
+  }
+
   // Utilitário opcional para logging ou debug
   async dumpAllData() {
+    await this._ensureReady();
     const profiles = await this.getAllProfiles();
     return JSON.stringify(profiles, null, 2);
   }
