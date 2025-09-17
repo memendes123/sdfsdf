@@ -10,6 +10,15 @@
     <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
+    <% const baseHref =
+        typeof panelBase === 'string' && panelBase
+            ? panelBase
+            : typeof basePath === 'string' && basePath
+            ? basePath
+            : typeof baseUrl === 'string'
+            ? baseUrl
+            : '';
+    %>
     <% const baseHref = typeof basePath !== 'undefined' ? basePath : (typeof baseUrl !== 'undefined' ? baseUrl : ''); %>
     <div class="app-shell">
         <header class="app-header">

@@ -56,9 +56,18 @@
             document.body.appendChild(script);
         })();
     </script>
+    <% const panelBaseHref =
+        typeof panelBase === 'string' && panelBase
+            ? panelBase
+            : typeof basePath === 'string' && basePath
+            ? basePath
+            : typeof baseUrl === 'string'
+            ? baseUrl
+            : '';
+    %>
     <% if (includePanelScript) { %>
         <script>
-            window.__PANEL_BASE__ = '<%= typeof base !== 'undefined' ? base : '' %>';
+            window.__PANEL_BASE__ = <%- JSON.stringify(panelBaseHref) %>;
             window.__INITIAL_QUEUE__ = <%- JSON.stringify(typeof initialQueue !== 'undefined' ? initialQueue : null) %>;
         </script>
         <script src="/panel.js" defer></script>
