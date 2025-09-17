@@ -8,7 +8,7 @@
             <button class="btn btn--secondary" data-command="backup">💾 Criar backup</button>
             <a class="btn btn--ghost" href="/logs">📜 Ver logs</a>
         </div>
-        <p class="hero__hint">Dica: configure o arquivo <code>accounts.txt</code> e garanta que o <code>REP4REP_KEY</code> esteja definido antes de rodar as automações.</p>
+        <p class="hero__hint">Dica: configure o arquivo <code>accounts.txt</code> e garanta que o <code>REP4REP_KEY</code> está definido antes de rodar as automações.</p>
     </div>
     <aside class="hero__card">
         <h2>Resumo rápido</h2>
@@ -119,7 +119,7 @@
                                         <span><%= user.email %></span>
                                     </div>
                                     <div class="user-meta">
-                                        <span class="badge badge--status badge--<%= user.status %>"><%= user.status %></span>
+                                        <span class="badge badge--status badge--<%= ['active','blocked','pending'].includes(user.status) ? user.status : 'muted' %>"><%= user.status %></span>
                                         <% if (user.rep4repKey) { %>
                                             <span class="badge">Key definida</span>
                                         <% } else { %>
@@ -153,20 +153,3 @@
 <div class="toast" data-toast hidden></div>
 
 <%- include('partials/layout-end', { includePanelScript: true }) %>
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Painel Rep4Rep</title>
-    <link rel="stylesheet" href="/style.css">
-</head>
-<body>
-    <h1>Painel do Bot Rep4Rep</h1>
-    <p>Os comandos abaixo executam diretamente no servidor. Aguarde o carregamento após clicar.</p>
-    <ul>
-        <li><a href="/run/autoRun" target="_blank">▶️ Rodar autoRun</a></li>
-        <li><a href="/run/stats" target="_blank">📊 Ver estatísticas</a></li>
-        <li><a href="/run/backup" target="_blank">💾 Backup</a></li>
-        <li><a href="/logs" target="_blank">📜 Ver logs</a></li>
-    </ul>
-</body>
-</html>

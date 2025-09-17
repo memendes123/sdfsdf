@@ -5,6 +5,10 @@ const { randomUUID } = require('crypto');
 const DATA_DIR = path.join(__dirname, '..', '..', 'data');
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
 
+function generateApiToken() {
+  return randomUUID().replace(/-/g, '');
+}
+
 async function ensureDataFile() {
   await fs.mkdir(DATA_DIR, { recursive: true });
   try {
@@ -21,6 +25,7 @@ async function ensureDataFile() {
         status: 'active',
         role: 'customer',
         notes: 'Exemplo de usuário. Pode ser removido com segurança.',
+        apiToken: generateApiToken(),
         createdAt: now,
         updatedAt: now,
       },
@@ -34,7 +39,41 @@ async function readUsers() {
   const raw = await fs.readFile(USERS_FILE, 'utf8');
   try {
     const data = JSON.parse(raw);
-    return Array.isArray(data) ? data : [];
+    if (!Array.isArray(data)) {
+      return [];
+    }
+
+    let mutated = false;
+    const normalized = data.map((user) => {
+      const next = { ...user };
+      if (!next.id) {
+        next.id = randomUUID();
+        mutated = true;
+      }
+      if (!next.role) {
+        next.role = 'customer';
+        mutated = true;
+      }
+      if (!next.status) {
+        next.status = 'active';
+        mutated = true;
+      }
+      if (typeof next.credits !== 'number') {
+        next.credits = 0;
+        mutated = true;
+      }
+      if (!next.apiToken) {
+        next.apiToken = generateApiToken();
+        mutated = true;
+      }
+      return next;
+    });
+
+    if (mutated) {
+      await fs.writeFile(USERS_FILE, JSON.stringify(normalized, null, 2), 'utf8');
+    }
+
+    return normalized;
   } catch (error) {
     console.error('[UserStore] Falha ao interpretar users.json. Recriando arquivo...', error);
     await fs.writeFile(USERS_FILE, '[]', 'utf8');
@@ -97,6 +136,7 @@ async function createUser({ displayName, email, rep4repKey = '', credits = 0, no
     status: 'active',
     role: 'customer',
     notes: normalizeString(notes),
+    apiToken: generateApiToken(),
     createdAt: now,
     updatedAt: now,
   };
@@ -157,7 +197,11 @@ async function updateUser(id, updates = {}) {
   }
 
   if (updates.credits !== undefined) {
-    next.credits = normalizeCredits(updates.credits);
+    const creditsValue = Number(updates.credits);
+    if (!Number.isFinite(creditsValue) || creditsValue < 0) {
+      throw new Error('Créditos inválidos.');
+    }
+    next.credits = Math.round(creditsValue);
   }
 
   next.updatedAt = new Date().toISOString();
@@ -180,11 +224,83 @@ async function adjustCredits(id, delta) {
     throw new Error('Informe um valor numérico para ajustar créditos.');
   }
 
-  const credits = normalizeCredits(current.credits + amount);
+  const nextCredits = current.credits + Math.round(amount);
+  if (nextCredits < 0) {
+    throw new Error('Créditos insuficientes para remover.');
+  }
+
+  const credits = normalizeCredits(nextCredits);
   const updated = { ...current, credits, updatedAt: new Date().toISOString() };
   users[index] = updated;
   await writeUsers(users);
   return updated;
+}
+
+async function consumeCredits(id, amount = 1) {
+  const qty = Math.max(0, Math.floor(Number(amount)));
+  if (qty <= 0) {
+    return getUser(id);
+  }
+
+  const users = await readUsers();
+  const index = users.findIndex((user) => user.id === id);
+  if (index === -1) {
+    throw new Error('Usuário não encontrado.');
+  }
+
+  const current = users[index];
+  if (current.credits < qty) {
+    throw new Error('Créditos insuficientes.');
+  }
+
+  const updated = {
+    ...current,
+    credits: current.credits - qty,
+    updatedAt: new Date().toISOString(),
+  };
+  users[index] = updated;
+  await writeUsers(users);
+  return updated;
+}
+
+async function rotateApiToken(id) {
+  const users = await readUsers();
+  const index = users.findIndex((user) => user.id === id);
+  if (index === -1) {
+    throw new Error('Usuário não encontrado.');
+  }
+
+  const updated = {
+    ...users[index],
+    apiToken: generateApiToken(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  users[index] = updated;
+  await writeUsers(users);
+  return updated;
+}
+
+async function authenticateUser({ userId, token }) {
+  if (!userId || !token) {
+    return null;
+  }
+
+  const users = await readUsers();
+  const user = users.find((item) => item.id === userId);
+  if (!user) {
+    return null;
+  }
+
+  if (user.status !== 'active') {
+    return null;
+  }
+
+  if (user.apiToken !== token) {
+    return null;
+  }
+
+  return user;
 }
 
 module.exports = {
@@ -194,4 +310,7 @@ module.exports = {
   createUser,
   updateUser,
   adjustCredits,
+  consumeCredits,
+  authenticateUser,
+  rotateApiToken,
 };
