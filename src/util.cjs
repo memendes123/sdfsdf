@@ -184,6 +184,7 @@ async function sendDiscordWebhook(payload = {}) {
   } catch (error) {
     const targetLabel = overrideUrl ? ' (customizado)' : '';
     log(`⚠️ Falha ao enviar webhook do Discord${targetLabel}: ${error.message}`);
+
     log(`⚠️ Falha ao enviar webhook do Discord: ${error.message}`);
     return false;
   }
@@ -1147,6 +1148,32 @@ async function removeProfile(username, options = {}) {
 }
 
 
+async function failQueuedJob(job, client, reason, logMessage) {
+  const message = reason || 'Falha ao processar pedido.';
+  if (logMessage) {
+    log(logMessage);
+  }
+
+  let failedJob = null;
+  if (job?.id) {
+    try {
+      failedJob = await runQueue.failJob(job.id, message);
+    } catch (failError) {
+      log(`⚠️ Falha ao marcar pedido ${job.id} como falho: ${failError.message}`);
+    }
+  }
+
+  if (failedJob) {
+    try {
+      await announceQueueEvent({ type: 'job.failed', job: failedJob, client, error: message });
+    } catch (notifyError) {
+      log(`⚠️ Falha ao notificar erro via webhook: ${notifyError.message}`);
+    }
+  }
+
+  return { status: 'failed', client: client || null, queueJob: failedJob, error: message };
+}
+
 async function prioritizedAutoRun(options = {}) {
   const {
     ownerToken = process.env.REP4REP_KEY ?? null,
@@ -1173,6 +1200,16 @@ async function prioritizedAutoRun(options = {}) {
     try {
       const summary = await autoRun({ ...baseRunOptions, apiToken: ownerToken });
       result.owner = summary;
+      try {
+        await announceQueueEvent({
+          type: 'owner.completed',
+          summary,
+          webhookUrl: ownerWebhookUrl,
+          client: ownerUser,
+        });
+      } catch (notifyError) {
+        log(`⚠️ Falha ao notificar lote prioritário: ${notifyError.message}`);
+      }
       await announceQueueEvent({ type: 'owner.completed', summary, webhookUrl: ownerWebhookUrl, client: ownerUser });
       await announceQueueEvent({ type: 'owner.completed', summary });
       if (summary.totalComments > 0) {
@@ -1185,6 +1222,7 @@ async function prioritizedAutoRun(options = {}) {
     log('⚠️ Nenhum token do proprietário configurado. Pulando etapa prioritária.');
   }
 
+  let completedJobs = 0;
   let processedJobs = 0;
 
   while (true) {
@@ -1200,8 +1238,10 @@ async function prioritizedAutoRun(options = {}) {
       break;
     }
 
+  const processJob = async (job) => {
     const client = job.user || (await userStore.getUser(job.userId));
     if (!client) {
+      return failQueuedJob(job, null, 'Usuário não encontrado.', `❌ Pedido ${job.id} removido da fila: usuário inexistente.`);
       const failedJob = await runQueue.failJob(job.id, 'Usuário não encontrado.');
       log(`❌ Pedido ${job.id} removido da fila: usuário inexistente.`);
       try {
@@ -1219,6 +1259,30 @@ async function prioritizedAutoRun(options = {}) {
     const clientLabel = formatClientLabel(client);
 
     if (typeof clientFilter === 'function' && !clientFilter(client)) {
+      return failQueuedJob(
+        job,
+        client,
+        'Pedido bloqueado pelo filtro do operador.',
+        `⚠️ Pedido ${job.id} ignorado (filtro do operador).`,
+      );
+    }
+
+    if (client.status !== 'active') {
+      return failQueuedJob(
+        job,
+        client,
+        'Conta inativa ou bloqueada.',
+        `⚠️ ${clientLabel} ignorado: conta não está ativa.`,
+      );
+    }
+
+    if (!client.rep4repKey) {
+      return failQueuedJob(
+        job,
+        client,
+        'Chave Rep4Rep não configurada.',
+        `⚠️ ${clientLabel} ignorado: key Rep4Rep ausente.`,
+      );
       const failedJob = await runQueue.failJob(job.id, 'Pedido bloqueado pelo filtro do operador.');
       log(`⚠️ Pedido ${job.id} ignorado (filtro do operador).`);
       try {
@@ -1269,6 +1333,12 @@ async function prioritizedAutoRun(options = {}) {
     const isAdmin = client.role === 'admin';
     const creditLimit = isAdmin ? Infinity : Number(client.credits) || 0;
     if (!isAdmin && creditLimit <= 0) {
+      return failQueuedJob(
+        job,
+        client,
+        'Créditos insuficientes.',
+        `⚠️ ${clientLabel} sem créditos suficientes. Pedido removido.`,
+      );
       const failedJob = await runQueue.failJob(job.id, 'Créditos insuficientes.');
       log(`⚠️ ${clientLabel} sem créditos suficientes. Pedido removido.`);
       try {
@@ -1308,6 +1378,7 @@ async function prioritizedAutoRun(options = {}) {
       usedCredits += 1;
       return usedCredits < creditLimit;
     };
+
 
     let usedCredits = 0;
     const upstreamTaskHandler = baseRunOptions.onTaskComplete;
@@ -1385,8 +1456,6 @@ async function prioritizedAutoRun(options = {}) {
         queueJob: completedJob,
         status: 'completed',
       };
-      result.clients.push(clientResult);
-      processedJobs += 1;
 
       try {
         await announceQueueEvent({
@@ -1414,7 +1483,35 @@ async function prioritizedAutoRun(options = {}) {
       } else {
         log(`ℹ️ Nenhum comentário pendente para ${clientLabel}.`);
       }
+
+      return clientResult;
     } catch (error) {
+      const message = error?.message || 'Falha ao processar cliente.';
+      return failQueuedJob(job, client, message, `❌ Falha ao processar ${clientLabel}: ${message}`);
+    }
+  };
+
+  while (true) {
+    let job;
+    try {
+      job = await runQueue.takeNextPendingJob();
+    } catch (error) {
+      log(`❌ Falha ao obter próxima ordem da fila: ${error.message}`);
+      break;
+    }
+
+    if (!job) {
+      break;
+    }
+
+    const outcome = await processJob(job);
+    if (!outcome) {
+      continue;
+    }
+
+    result.clients.push(outcome);
+    if (outcome.status === 'completed') {
+      completedJobs += 1;
       const failedJob = await runQueue.failJob(job.id, error.message);
       log(`❌ Falha ao processar ${clientLabel}: ${error.message}`);
       result.clients.push({ client, error: error.message, queueJob: failedJob, status: 'failed' });
@@ -1426,7 +1523,7 @@ async function prioritizedAutoRun(options = {}) {
     }
   }
 
-  if (processedJobs === 0) {
+  if (completedJobs === 0) {
     log('Nenhuma ordem na fila de clientes neste ciclo.');
   }
 
