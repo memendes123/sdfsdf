@@ -25,3 +25,18 @@
     </div>
 </section>
 <%- include('partials/layout-end', { includePanelScript: false }) %>
+<!DOCTYPE html>
+<html>
+<head><title>Logs</title></head>
+<body>
+<h2>📜 Logs</h2>
+<% if (!logs.length) { %>
+    <p>Nenhum log encontrado.</p>
+<% } else { %>
+    <% logs.forEach(log => { %>
+        <h3><%= log.name %></h3>
+        <pre><%= log.content %></pre>
+    <% }) %>
+<% } %>
+</body>
+</html>

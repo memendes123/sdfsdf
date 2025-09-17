@@ -64,8 +64,14 @@ async function mainMenu() {
                 break;
             case "6":
                 rl.question("Usuário a remover: ", async (username) => {
-                    await removeProfile(username.trim());
-                    mainMenu();
+                    try {
+                        await removeProfile(username.trim());
+                    } catch (error) {
+                        if (!error?.logged) {
+                            log(`❌ Falha ao remover perfil: ${error.message}`, true);
+                        }
+                    }
+                    setTimeout(mainMenu, 1000);
                 });
                 return;
             case "7":

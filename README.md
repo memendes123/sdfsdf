@@ -28,6 +28,7 @@ Automação de comentários no Steam via integração com o [Rep4Rep.com](https:
 │   └── db.cjs             # Banco de dados SQLite
 ├── web/                   # Painel web (Express + EJS + CSS/JS)
 ├── data/users.json        # Base de clientes/créditos (preview)
+├── web/                   # Painel web em Express.js
 ├── accounts.txt           # Lista de contas Steam
 ├── .env                   # Configuração do bot
 ├── steamprofiles.db       # Banco de dados de perfis
@@ -67,7 +68,10 @@ Automação de comentários no Steam via integração com o [Rep4Rep.com](https:
 - Botões para autoRun, estatísticas e backup com resultado em tempo real
 - Pré-visualização de um módulo de clientes/créditos (pensado para o futuro painel público)
 - Visualização dos últimos logs em cartões elegantes
+- Botões para iniciar tarefas via navegador
+- Visualização dos últimos logs (com fallback quando a pasta estiver vazia)
 - Autenticação com login e senha via `.env`
+- Retorno imediato dos comandos direto na interface (sem processos extras)
 
 ### ✅ Acesso:
 Abra no navegador: [http://localhost:3000](http://localhost:3000)
