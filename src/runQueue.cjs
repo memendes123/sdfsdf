@@ -555,6 +555,95 @@ async function cancelAllPendingJobs({ reason = 'Cancelado em massa (painel)' } =
   };
 }
 
+async function reorderJob(id, { position } = {}) {
+  if (!id) {
+    throw new Error('ID do pedido obrigatório para reordenar.');
+  }
+
+  const target = Number(position);
+  if (!Number.isFinite(target) || target < 1) {
+    throw new Error('Posição inválida informada para reordenação.');
+  }
+
+  const connection = await db.getConnection();
+  const orderRows = await connection.all(
+    `SELECT id, status
+       FROM run_queue
+      WHERE status IN ('pending','running')
+      ORDER BY datetime(enqueuedAt)`
+  );
+
+  const pendingRows = orderRows.filter((row) => row.status === 'pending');
+  const currentIndex = pendingRows.findIndex((row) => row.id === id);
+
+  if (currentIndex === -1) {
+    throw new Error('Apenas pedidos pendentes podem ser reordenados.');
+  }
+
+  const clampedIndex = Math.min(pendingRows.length - 1, Math.max(0, Math.floor(target) - 1));
+  if (clampedIndex === currentIndex) {
+    const unchanged = await connection.get(`${buildJobWithUserQuery()} WHERE q.id = ?`, [id]);
+    return { changed: false, job: mapQueueRowWithUser(unchanged) };
+  }
+
+  const [movingRow] = pendingRows.splice(currentIndex, 1);
+  pendingRows.splice(clampedIndex, 0, movingRow);
+
+  const baseTime = Date.now();
+  await connection.run('BEGIN TRANSACTION');
+  try {
+    for (let index = 0; index < pendingRows.length; index += 1) {
+      const row = pendingRows[index];
+      const timestamp = new Date(baseTime + index).toISOString();
+      await connection.run(
+        `UPDATE run_queue SET enqueuedAt = ? WHERE id = ? AND status = 'pending'`,
+        [timestamp, row.id],
+      );
+    }
+    await connection.run('COMMIT');
+  } catch (error) {
+    await connection.run('ROLLBACK');
+    throw error;
+  }
+
+  const updated = await connection.get(`${buildJobWithUserQuery()} WHERE q.id = ?`, [id]);
+  return { changed: true, job: mapQueueRowWithUser(updated) };
+}
+
+async function cancelAllPendingJobs({ reason = 'Cancelado em massa (painel)' } = {}) {
+  const connection = await db.getConnection();
+  const pendingRows = await connection.all(
+    `${buildJobWithUserQuery()} WHERE q.status = 'pending' ORDER BY datetime(q.enqueuedAt)`
+  );
+
+  if (pendingRows.length === 0) {
+    return { cancelledCount: 0, jobs: [] };
+  }
+
+  const finishedAt = new Date().toISOString();
+  await connection.run(
+    `UPDATE run_queue
+        SET status = 'cancelled',
+            finishedAt = ?,
+            durationMs = 0,
+            error = ?
+      WHERE status = 'pending'`,
+    [finishedAt, reason || 'Cancelado em massa (painel)'],
+  );
+
+  const placeholders = pendingRows.map(() => '?').join(', ');
+  const ids = pendingRows.map((row) => row.id);
+  const updatedRows = await connection.all(
+    `${buildJobWithUserQuery()} WHERE q.id IN (${placeholders})`,
+    ids,
+  );
+
+  return {
+    cancelledCount: updatedRows.length,
+    jobs: updatedRows.map((row) => mapQueueRowWithUser(row)),
+  };
+}
+
 async function clearCompleted({ maxEntries = 100 } = {}) {
   const connection = await db.getConnection();
   await connection.run(
