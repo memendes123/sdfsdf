@@ -51,6 +51,7 @@ async function mainMenu() {
     log("14. Backup do banco de dados");
     log("15. Ciclo completo (adicionar, rodar e remover)");
     log("16. Ativar modo vigia (loop automático)");
+
     log("0. Sair", true);
 
     rl.question("Escolha uma opção: ", async (opt) => {
