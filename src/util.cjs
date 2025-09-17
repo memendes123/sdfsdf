@@ -63,6 +63,13 @@ const maintenanceState = {
   lastAutomaticBackup: null,
 };
 
+const IMMEDIATE_BACKUP_DEBOUNCE_MS = 1500;
+let scheduledBackupTimer = null;
+let scheduledBackupPromise = null;
+let scheduledBackupReason = 'alteração';
+let scheduledBackupResolve = null;
+let scheduledBackupReject = null;
+
 const keepAliveState = {
   running: false,
   stopRequested: false,
@@ -414,6 +421,52 @@ function scheduleAutomaticBackups() {
   setTimeout(run, 5_000);
 
   maintenanceState.backupTimer = setInterval(run, BACKUP_CHECK_INTERVAL_MS);
+}
+
+function queueAutomaticBackup({ reason = 'alteração' } = {}) {
+  const label = typeof reason === 'string' && reason.trim() ? reason.trim() : 'alteração';
+  scheduledBackupReason = label;
+
+  const scheduleRun = () => {
+    if (scheduledBackupTimer) {
+      clearTimeout(scheduledBackupTimer);
+    }
+    scheduledBackupTimer = setTimeout(async () => {
+      scheduledBackupTimer = null;
+      try {
+        log(`🗂️ Gerando backup automático (${scheduledBackupReason}).`);
+        const filePath = await backupDatabase();
+        if (scheduledBackupResolve) {
+          scheduledBackupResolve(filePath);
+        }
+      } catch (error) {
+        if (scheduledBackupReject) {
+          scheduledBackupReject(error);
+        }
+      } finally {
+        scheduledBackupPromise = null;
+        scheduledBackupResolve = null;
+        scheduledBackupReject = null;
+      }
+    }, IMMEDIATE_BACKUP_DEBOUNCE_MS);
+  };
+
+  if (scheduledBackupPromise) {
+    scheduleRun();
+    return scheduledBackupPromise;
+  }
+
+  scheduledBackupPromise = new Promise((resolve, reject) => {
+    scheduledBackupResolve = resolve;
+    scheduledBackupReject = (error) => {
+      log(`⚠️ Backup automático (${scheduledBackupReason}) falhou: ${error.message}`);
+      reject(error);
+    };
+  });
+
+  scheduleRun();
+
+  return scheduledBackupPromise;
 }
 
 function removeFromAccountsFile(username) {
@@ -1864,6 +1917,7 @@ module.exports = {
   collectUsageStats,
   resetProfileCookies,
   backupDatabase,
+  queueAutomaticBackup,
   scheduleAutomaticBackups,
   startKeepAliveLoop,
   stopKeepAliveLoop,

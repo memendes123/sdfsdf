@@ -9,6 +9,7 @@ const {
   prioritizedAutoRun,
   collectUsageStats,
   backupDatabase,
+  queueAutomaticBackup,
   startKeepAliveLoop,
   stopKeepAliveLoop,
   getKeepAliveStatus,
@@ -18,6 +19,17 @@ const {
 const runQueue = require('../../src/runQueue.cjs');
 
 const LOGS_DIR = path.join(__dirname, '..', '..', 'logs');
+const ENV_REP4REP_KEY = (process.env.REP4REP_KEY || '').trim();
+
+function resolveOwnerCredentials(adminUser) {
+  const adminToken = adminUser?.rep4repKey ? adminUser.rep4repKey.trim() : '';
+  const token = adminToken || ENV_REP4REP_KEY || '';
+  return {
+    token,
+    webhookUrl: adminUser?.discordWebhookUrl || '',
+    user: adminUser || null,
+  };
+}
 
 userStore.ensureDataFile().catch((error) => {
   console.error('[Painel] Falha ao preparar storage de usuários:', error);
@@ -140,14 +152,15 @@ router.post('/api/run', async (req, res) => {
   const handlers = {
     autoRun: async () => {
       const adminUser = await userStore.findActiveAdmin();
-      if (!adminUser || !adminUser.rep4repKey) {
-        throw new Error('Configure a chave Rep4Rep no perfil admin antes de executar.');
+      const { token, webhookUrl, user } = resolveOwnerCredentials(adminUser);
+      if (!token) {
+        throw new Error('Configure a chave Rep4Rep no perfil admin ou defina REP4REP_KEY no ambiente antes de executar.');
       }
 
       const summary = await prioritizedAutoRun({
-        ownerToken: adminUser.rep4repKey,
-        ownerWebhookUrl: adminUser.discordWebhookUrl,
-        ownerUser: adminUser,
+        ownerToken: token,
+        ownerWebhookUrl: webhookUrl,
+        ownerUser: user,
         accountLimit: 100,
         maxCommentsPerAccount: 1000,
         clientFilter: (user) => user.role !== 'admin',
@@ -168,13 +181,14 @@ router.post('/api/run', async (req, res) => {
     },
     watchdogStart: async () => {
       const adminUser = await userStore.findActiveAdmin();
-      if (!adminUser || !adminUser.rep4repKey) {
-        throw new Error('Defina a chave Rep4Rep na conta admin para iniciar o vigia.');
+      const { token, webhookUrl, user } = resolveOwnerCredentials(adminUser);
+      if (!token) {
+        throw new Error('Defina a chave Rep4Rep na conta admin ou configure REP4REP_KEY para iniciar o vigia.');
       }
       const result = await startKeepAliveLoop({
-        ownerToken: adminUser.rep4repKey,
-        ownerWebhookUrl: adminUser.discordWebhookUrl,
-        ownerUser: adminUser,
+        ownerToken: token,
+        ownerWebhookUrl: webhookUrl,
+        ownerUser: user,
       });
       const status = getKeepAliveStatus();
       const message = result.alreadyRunning
@@ -294,6 +308,9 @@ router.post('/api/queue/:id/cancel', async (req, res) => {
 router.post('/api/users', async (req, res) => {
   try {
     const user = await userStore.createUser(req.body || {});
+    queueAutomaticBackup({ reason: 'novo usuário (painel)' }).catch((error) => {
+      console.warn('[Painel] Falha ao criar backup automático após cadastro:', error.message);
+    });
     res.status(201).json({ success: true, user });
   } catch (error) {
     res.status(400).json({ success: false, error: error.message });

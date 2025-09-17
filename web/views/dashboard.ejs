@@ -1,7 +1,5 @@
 <% const panelBase = typeof baseUrl === 'string' && baseUrl ? baseUrl : ''; %>
 <%- include('partials/layout-start', { title: title || 'Painel', page, panelBase }) %>
-<% const basePath = typeof baseUrl !== 'undefined' ? baseUrl : ''; %>
-<%- include('partials/layout-start', { title: title || 'Painel', page, basePath }) %>
 <section class="hero">
     <div class="hero__content">
         <h1>Centro de Controle Rep4Rep</h1>
@@ -9,16 +7,14 @@
         <div class="hero__actions">
             <button class="btn btn--primary" data-command="autoRun">▶️ Executar autoRun</button>
             <button class="btn btn--secondary" data-command="backup">💾 Criar backup</button>
-            <a class="btn btn--ghost" href="<%= panelBase %>/logs">📜 Ver logs</a>
-            <a class="btn btn--ghost" href="<%= basePath %>/logs">📜 Ver logs</a>
+            <a class="btn btn--ghost" href="<%= (panelBase || '') + '/logs' %>">📜 Ver logs</a>
         </div>
         <div class="watchdog-banner" data-watchdog-state-container>
             <span class="badge badge--muted">Modo vigia</span>
             <span class="watchdog-banner__state" data-watchdog-state data-state="off">desligado</span>
             <span class="watchdog-banner__info">última execução: <strong data-watchdog-last-run>—</strong></span>
         </div>
-            <p class="hero__hint">Dica: configure o arquivo <code>accounts.txt</code>, mantenha o bot do terminal rodando com a sua key e libere créditos apenas após validar os dados do cliente.</p>
-        <p class="hero__hint">Dica: configure o arquivo <code>accounts.txt</code> e garanta que o <code>REP4REP_KEY</code> está definido antes de rodar as automações.</p>
+        <p class="hero__hint">Dica: configure o arquivo <code>accounts.txt</code>, mantenha o bot do terminal rodando com a sua key e libere créditos apenas após validar os dados do cliente.</p>
     </div>
     <aside class="hero__card">
         <h2>Resumo rápido</h2>
