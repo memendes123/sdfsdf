@@ -346,18 +346,6 @@ async function autoRunComments(profile, client, tasks, authorSteamProfileId, max
                 log(`[${profile.username}] falha ao confirmar tarefa adicional: ${describeApiError(error)}`);
             }
 
-            }
-
-            completedTasks.add(randomTask.taskId);
-            commentsPosted++;
-            consecutiveFailures = 0;
-
-            try {
-                await api.completeTask(randomTask.taskId, randomTask.requiredCommentId, authorSteamProfileId); // Mark additional comments as completed
-            } catch (error) {
-                log(`[${profile.username}] falha ao confirmar tarefa adicional: ${describeApiError(error)}`);
-            }
-
             try {
                 await db.updateLastComment(profile.steamId);
             } catch (error) {
@@ -639,13 +627,19 @@ async function addProfileSetup(accountName, password, sharedSecret) {
     }
 }
 
+function createLoggedError(message) {
+    const error = new Error(message);
+    error.logged = true;
+    return error;
+}
+
 async function removeProfile(username) {
     const target = typeof username === 'string' ? username.trim() : '';
 
     if (!target) {
-        log('Informe o usuário a remover.', true);
-        process.exit();
-        return;
+        const message = 'Informe o usuário a remover.';
+        log(message, true);
+        return { success: false, reason: 'missing-username', message };
     }
 
     let profile;
@@ -653,15 +647,15 @@ async function removeProfile(username) {
         const profiles = await db.getAllProfiles();
         profile = profiles.find(p => p.username === target);
     } catch (error) {
-        log(`❌ Falha ao carregar perfis: ${error.message}`, true);
-        process.exit(1);
-        return;
+        const message = `❌ Falha ao carregar perfis: ${error.message}`;
+        log(message, true);
+        throw createLoggedError(message);
     }
 
     if (!profile) {
-        log(`⚠️ Perfil '${target}' não encontrado.`, true);
-        process.exit();
-        return;
+        const message = `⚠️ Perfil '${target}' não encontrado.`;
+        log(message, true);
+        return { success: false, reason: 'not-found', message };
     }
 
     if (profile.steamId) {
@@ -674,12 +668,15 @@ async function removeProfile(username) {
             log(`⚠️ Nenhuma entrada removida para '${target}'.`, true);
         }
     } catch (error) {
-        log(`❌ Erro ao remover '${target}' do banco: ${error.message}`, true);
+        const message = `❌ Erro ao remover '${target}' do banco: ${error.message}`;
+        log(message, true);
+        throw createLoggedError(message);
     }
 
     removeFromAccountsFile(target);
-    log(`✅ Remoção local concluída para '${target}'.`, true);
-    process.exit();
+    const successMessage = `✅ Remoção local concluída para '${target}'.`;
+    log(successMessage, true);
+    return { success: true, message: successMessage };
 }
 
 async function promptForCode(username, client) {
@@ -938,8 +935,6 @@ async function backupDatabase() {
         return null;
     }
 
-function backupDatabase() {
-    const src = db.getDatabasePath();
     const destDir = path.join(__dirname, '..', 'backups');
     if (!fs.existsSync(destDir)) {
         fs.mkdirSync(destDir, { recursive: true });
