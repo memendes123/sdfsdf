@@ -10,6 +10,9 @@ const {
   prioritizedAutoRun,
   collectUsageStats,
   backupDatabase,
+  startKeepAliveLoop,
+  stopKeepAliveLoop,
+  getKeepAliveStatus,
   describeApiError,
 } = require('../../src/util.cjs');
 
@@ -115,6 +118,29 @@ router.post('/api/run', async (req, res) => {
       }
       return { message: `📦 Backup criado em: ${filePath}`, filePath };
     },
+    watchdogStart: async () => {
+      const adminUser = await userStore.findActiveAdmin();
+      if (!adminUser || !adminUser.rep4repKey) {
+        throw new Error('Defina a chave Rep4Rep na conta admin para iniciar o vigia.');
+      }
+      const result = await startKeepAliveLoop({ ownerToken: adminUser.rep4repKey });
+      const status = getKeepAliveStatus();
+      const message = result.alreadyRunning
+        ? '⚠️ O modo vigia já está ativo.'
+        : '🛡️ Modo vigia ativado. Executará automaticamente no intervalo configurado.';
+      return { message, watchdog: status };
+    },
+    watchdogStop: async () => {
+      const result = await stopKeepAliveLoop();
+      const status = getKeepAliveStatus();
+      const message = result.stopped
+        ? '⏹️ Modo vigia encerrado.'
+        : '⚠️ O modo vigia já estava inativo.';
+      return { message, watchdog: status };
+    },
+    watchdogStatus: async () => {
+      return { message: 'Status do vigia atualizado.', watchdog: getKeepAliveStatus() };
+    },
   };
 
   const handler = handlers[command];
@@ -149,6 +175,10 @@ router.get('/api/users', async (req, res) => {
     console.error('[Painel] Falha ao listar usuários:', error);
     res.status(500).json({ success: false, error: 'Não foi possível carregar os usuários.' });
   }
+});
+
+router.get('/api/watchdog', (req, res) => {
+  res.json({ success: true, watchdog: getKeepAliveStatus() });
 });
 
 router.post('/api/users', async (req, res) => {

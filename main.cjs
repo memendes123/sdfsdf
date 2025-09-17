@@ -17,10 +17,14 @@ const {
     clearInvalidAccounts,
     usageStats,
     resetProfileCookies,
-    backupDatabase
+    backupDatabase,
+    scheduleAutomaticBackups,
+    keepBotAliveInteractive,
+    closeReadline
 } = require('./src/util.cjs');
 
 require('dotenv').config();
+scheduleAutomaticBackups();
 const readline = require('readline');
 
 const rl = readline.createInterface({
@@ -46,6 +50,8 @@ async function mainMenu() {
     log("13. Resetar cookies dos perfis");
     log("14. Backup do banco de dados");
     log("15. Ciclo completo (adicionar, rodar e remover)");
+    log("16. Ativar modo vigia (loop automático)");
+
     log("0. Sair", true);
 
     rl.question("Escolha uma opção: ", async (opt) => {
@@ -111,6 +117,10 @@ async function mainMenu() {
             case "14":
                 await backupDatabase();
                 break;
+            case "16":
+                closeReadline();
+                await keepBotAliveInteractive();
+                return;
             case "0":
                 rl.close();
                 return;

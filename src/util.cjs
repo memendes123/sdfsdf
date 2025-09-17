@@ -17,6 +17,7 @@ const DATA_DIR = path.join(ROOT_DIR, 'data');
 const ACCOUNTS_PATH = path.join(ROOT_DIR, 'accounts.txt');
 const LOGS_DIR = path.join(ROOT_DIR, 'logs');
 const BACKUPS_DIR = path.join(ROOT_DIR, 'backups');
+const MAINTENANCE_STATE_FILE = path.join(DATA_DIR, 'maintenance-state.json');
 const EXPORTS_DIR = path.join(DATA_DIR, 'exports');
 
 const DEFAULT_LOGIN_DELAY = 30_000;
@@ -28,8 +29,33 @@ const configuredMaxComments = sanitizePositiveInteger(
   10,
 );
 const MAX_COMMENTS_PER_RUN = Math.min(1000, configuredMaxComments);
+const KEEPALIVE_INTERVAL_MINUTES = Math.max(5, sanitizePositiveInteger(
+  process.env.KEEPALIVE_INTERVAL_MINUTES,
+  15,
+));
+const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+const BACKUP_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000;
+
 
 let rl = null;
+
+const maintenanceState = {
+  backupTimer: null,
+  initialized: false,
+  lastAutomaticBackup: null,
+};
+
+const keepAliveState = {
+  running: false,
+  stopRequested: false,
+  promise: null,
+  intervalMs: KEEPALIVE_INTERVAL_MINUTES * 60 * 1000,
+  lastRunAt: null,
+  startedAt: null,
+  lastError: null,
+  runs: 0,
+  ownerToken: null,
+};
 
 const statusMessage = {
   inactive: 0,
@@ -79,6 +105,96 @@ function logInvalidAccount(username, reason) {
   const timestamp = new Date().toLocaleTimeString();
   const line = `[${timestamp}] ${username} - ${reason}\n`;
   fs.appendFileSync(logFile, line);
+}
+
+function readMaintenanceMetadata() {
+  try {
+    const raw = fs.readFileSync(MAINTENANCE_STATE_FILE, 'utf8');
+    const data = JSON.parse(raw);
+    if (!data || typeof data !== 'object') {
+      return {};
+    }
+    return data;
+  } catch (error) {
+    return {};
+  }
+}
+
+function writeMaintenanceMetadata(data) {
+  try {
+    ensureDirectory(path.dirname(MAINTENANCE_STATE_FILE));
+    fs.writeFileSync(MAINTENANCE_STATE_FILE, JSON.stringify(data, null, 2));
+  } catch (error) {
+    log(`⚠️ Não foi possível salvar metadados de manutenção: ${error.message}`);
+  }
+}
+
+function getLatestBackupTimestamp() {
+  if (!fs.existsSync(BACKUPS_DIR)) {
+    return 0;
+  }
+
+  const files = fs
+    .readdirSync(BACKUPS_DIR)
+    .filter((file) => file.toLowerCase().endsWith('.sqlite'));
+
+  let latest = 0;
+  for (const file of files) {
+    try {
+      const stats = fs.statSync(path.join(BACKUPS_DIR, file));
+      latest = Math.max(latest, stats.mtimeMs, stats.ctimeMs ?? 0);
+    } catch (error) {
+      log(`⚠️ Não foi possível ler data do backup ${file}: ${error.message}`);
+    }
+  }
+  return latest;
+}
+
+async function ensureAutomaticBackup() {
+  const metadata = readMaintenanceMetadata();
+  const recorded = metadata.lastAutomaticBackup
+    ? new Date(metadata.lastAutomaticBackup).getTime()
+    : 0;
+  const latestFile = getLatestBackupTimestamp();
+  const lastBackup = Math.max(recorded || 0, latestFile || 0);
+  const now = Date.now();
+
+  if (lastBackup && now - lastBackup < THREE_DAYS_MS) {
+    return null;
+  }
+
+  log('🗂️ Executando backup automático programado...');
+  const filePath = await backupDatabase();
+  if (filePath) {
+    metadata.lastAutomaticBackup = new Date().toISOString();
+    writeMaintenanceMetadata(metadata);
+    maintenanceState.lastAutomaticBackup = metadata.lastAutomaticBackup;
+  }
+  return filePath;
+}
+
+function scheduleAutomaticBackups() {
+  if (maintenanceState.initialized) {
+    return;
+  }
+  maintenanceState.initialized = true;
+
+  ensureDirectory(path.dirname(MAINTENANCE_STATE_FILE));
+  const metadata = readMaintenanceMetadata();
+  if (metadata.lastAutomaticBackup) {
+    maintenanceState.lastAutomaticBackup = metadata.lastAutomaticBackup;
+  }
+
+  const run = () => {
+    ensureAutomaticBackup().catch((error) => {
+      log(`⚠️ Backup automático falhou: ${error.message}`);
+    });
+  };
+
+  // Executa verificação logo no início, mas sem bloquear a inicialização.
+  setTimeout(run, 5_000);
+
+  maintenanceState.backupTimer = setInterval(run, BACKUP_CHECK_INTERVAL_MS);
 }
 
 function removeFromAccountsFile(username) {
@@ -913,6 +1029,133 @@ async function prioritizedAutoRun(options = {}) {
   return result;
 }
 
+async function waitWithAbort(totalMs, state = keepAliveState) {
+  let remaining = Math.max(0, Number(totalMs) || 0);
+  const step = Math.min(60_000, Math.max(1_000, remaining));
+  while (!state.stopRequested && remaining > 0) {
+    const chunk = Math.min(step, remaining);
+    await sleep(chunk);
+    remaining -= chunk;
+  }
+}
+
+async function startKeepAliveLoop(options = {}) {
+  if (keepAliveState.running) {
+    return { alreadyRunning: true, status: getKeepAliveStatus() };
+  }
+
+  const intervalMinutes = Math.max(
+    5,
+    sanitizePositiveInteger(options.intervalMinutes, KEEPALIVE_INTERVAL_MINUTES),
+  );
+  keepAliveState.intervalMs = intervalMinutes * 60 * 1000;
+  keepAliveState.stopRequested = false;
+  keepAliveState.running = true;
+  keepAliveState.startedAt = new Date().toISOString();
+  keepAliveState.lastError = null;
+  keepAliveState.runs = 0;
+  keepAliveState.ownerToken = options.ownerToken || process.env.REP4REP_KEY || null;
+
+  const runOptions = {
+    accountLimit: 100,
+    maxCommentsPerAccount: MAX_COMMENTS_PER_RUN,
+    ...options.runOptions,
+  };
+
+  const loop = async () => {
+    while (!keepAliveState.stopRequested) {
+      try {
+        const summary = await prioritizedAutoRun({
+          ...runOptions,
+          ownerToken: keepAliveState.ownerToken || runOptions.ownerToken,
+        });
+        keepAliveState.lastRunAt = new Date().toISOString();
+        keepAliveState.runs += 1;
+        keepAliveState.lastError = null;
+        keepAliveState.lastSummary = {
+          totalComments: summary?.owner?.totalComments ?? summary?.totalComments ?? 0,
+          timestamp: keepAliveState.lastRunAt,
+        };
+      } catch (error) {
+        keepAliveState.lastRunAt = new Date().toISOString();
+        keepAliveState.lastError = error.message;
+        log(`⚠️ Vigia automático falhou: ${error.message}`);
+      }
+
+      if (keepAliveState.stopRequested) {
+        break;
+      }
+
+      await waitWithAbort(keepAliveState.intervalMs);
+    }
+
+    keepAliveState.running = false;
+    keepAliveState.promise = null;
+  };
+
+  keepAliveState.promise = loop();
+  return { started: true, status: getKeepAliveStatus() };
+}
+
+async function stopKeepAliveLoop() {
+  if (!keepAliveState.running) {
+    return { stopped: false, status: getKeepAliveStatus() };
+  }
+
+  keepAliveState.stopRequested = true;
+  if (keepAliveState.promise) {
+    try {
+      await keepAliveState.promise;
+    } catch (error) {
+      log(`⚠️ Erro ao encerrar vigia: ${error.message}`);
+    }
+  }
+
+  keepAliveState.running = false;
+  keepAliveState.promise = null;
+  return { stopped: true, status: getKeepAliveStatus() };
+}
+
+function getKeepAliveStatus() {
+  return {
+    running: keepAliveState.running,
+    intervalMinutes: Math.round((keepAliveState.intervalMs / 60_000) * 10) / 10,
+    startedAt: keepAliveState.startedAt,
+    lastRunAt: keepAliveState.lastRunAt,
+    runs: keepAliveState.runs,
+    lastError: keepAliveState.lastError,
+    ownerTokenDefined: Boolean(keepAliveState.ownerToken),
+  };
+}
+
+async function keepBotAliveInteractive(options = {}) {
+  const { alreadyRunning } = await startKeepAliveLoop(options);
+  if (alreadyRunning) {
+    log('⚠️ O modo vigia já está ativo em segundo plano.');
+    return getKeepAliveStatus();
+  }
+
+  log(
+    `🛡️ Modo vigia ativo. Executando prioridade a cada ${Math.round(
+      keepAliveState.intervalMs / 60_000,
+    )} minuto(s). Pressione Ctrl+C para encerrar.`,
+  );
+
+  return new Promise((resolve) => {
+    const finish = async () => {
+      log('⏹️ Encerrando modo vigia. Aguardando ciclo atual...');
+      await stopKeepAliveLoop();
+      process.off('SIGINT', finish);
+      process.off('SIGTERM', finish);
+      log('✅ Modo vigia encerrado.');
+      resolve(getKeepAliveStatus());
+    };
+
+    process.once('SIGINT', finish);
+    process.once('SIGTERM', finish);
+  });
+}
+
 async function checkAndSyncProfiles(options = {}) {
   const { apiClient = api, apiToken = null } = options;
   const profiles = await db.getAllProfiles();
@@ -1172,6 +1415,11 @@ module.exports = {
   collectUsageStats,
   resetProfileCookies,
   backupDatabase,
+  scheduleAutomaticBackups,
+  startKeepAliveLoop,
+  stopKeepAliveLoop,
+  getKeepAliveStatus,
+  keepBotAliveInteractive,
   describeApiError,
   readAccountsFile,
   parseStoredCookies,

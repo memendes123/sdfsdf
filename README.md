@@ -53,6 +53,10 @@ Automação de comentários para Steam integrada ao [Rep4Rep.com](https://rep4re
    npm install
    cd web && npm install
    ```
+   > 💡 Usuários Windows podem executar `install-bot.bat` para automatizar a criação do `.env` e a instalação das dependências da raiz e do painel.
+3. Preencha `accounts.txt` com uma conta por linha (`username:senha:shared_secret`).
+4. (Opcional) Popule `data/users.json` apenas como semente. Na primeira execução os dados são migrados para o SQLite automaticamente.
+5. Inicie apenas o bot (`npm run bot`), somente o painel (`npm run painel`) ou ambos (`npm run dev`). No Windows, o arquivo `start-bot.bat` oferece um menu para iniciar apenas a CLI ou CLI + painel (com ou sem abrir o navegador).
 3. Preencha `accounts.txt` com uma conta por linha (`username:senha:shared_secret`).
 4. (Opcional) Popule `data/users.json` apenas como semente. Na primeira execução os dados são migrados para o SQLite automaticamente.
 5. Inicie apenas o bot (`npm run bot`), somente o painel (`npm run painel`) ou ambos (`npm run dev`).
@@ -80,6 +84,8 @@ Automação de comentários para Steam integrada ao [Rep4Rep.com](https://rep4re
 | 13  | Resetar cookies                                                 |
 | 14  | Criar backup do banco                                           |
 | 15  | **Ciclo completo**: adiciona contas ➜ executa autoRun ➜ remove  |
+| 16  | Ativar modo vigia (loop automático em segundo plano)             |
+=======
 | 0   | Sair                                                            |
 
 A opção 15 impõe automaticamente **100 contas** e **1000 comentários por conta** como teto, garantindo que execuções pontuais não ultrapassem o combinado com clientes.
@@ -89,6 +95,9 @@ A opção 15 impõe automaticamente **100 contas** e **1000 comentários por con
 - O agendador corta a lista de contas para, no máximo, 100 perfis por lote ao atender clientes.
 - Clientes precisam ter perfis ativos no Rep4Rep antes da execução; o backend valida isso antes de iniciar.
 - Ao rodar tarefas para clientes (via painel ou API), os perfis usados são removidos automaticamente do Rep4Rep ao final para não expor suas contas proprietárias.
+- Um serviço interno cria um **backup automático** do banco a cada 3 dias (ou quando nenhum backup recente é encontrado). Admins ainda podem gerar backups manuais sempre que desejarem.
+- O modo vigia pode ser acionado pela CLI (opção 16) ou pelo painel admin para manter o bot em execução contínua no servidor respeitando o limite de 100 contas / 1000 comentários.
+
 
 ## 🌐 Painel web
 O servidor Express roda em `http://localhost:3000` (ajustável via `PORT`). A rota raiz serve o portal do cliente; `/admin` abre o painel protegido por autenticação básica.
@@ -98,6 +107,9 @@ O servidor Express roda em `http://localhost:3000` (ajustável via `PORT`). A ro
 2. Cadastre um usuário com `role = admin` pelo painel e defina nele a chave Rep4Rep que deseja usar quando estiver logado no painel.
 3. Ao clicar em **Executar autoRun** o painel busca essa chave no banco, executa o lote prioritário e segue com a fila de clientes. A chave do `.env` permanece oculta para o navegador.
 4. O painel ainda traz estatísticas, criação de backups e histórico de logs em tempo real.
+5. O card **Modo VPS / Vigia** permite iniciar/parar o loop automático diretamente do painel e acompanha status, intervalo configurado e erros do ciclo.
+6. Clique em **Gerenciar** na tabela de clientes para abrir o editor lateral e ajustar dados completos (status, créditos, key, telefone, role) sem editar código.
+
 
 ### Portal do cliente
 - Cadastro exige nome completo, username, email, senha (≥ 8 caracteres), data de nascimento, Discord ID, Rep4Rep ID e telefone/WhatsApp com DDI.
@@ -130,6 +142,8 @@ O servidor Express roda em `http://localhost:3000` (ajustável via `PORT`). A ro
 | `PANEL_USERNAME` / `PANEL_PASSWORD` | Credenciais do Basic Auth do painel. |
 | `PORT` | Porta HTTP do painel (padrão `3000`). |
 | `DATABASE_PATH` | Caminho alternativo para o `steamprofiles.db` (opcional). |
+| `KEEPALIVE_INTERVAL_MINUTES` | Intervalo (min) entre ciclos do modo vigia automático (mínimo 5). |
+
 
 Outras variáveis herdadas do `env.example` continuam válidas (SMTP, Discord, etc.).
 
@@ -138,6 +152,9 @@ Outras variáveis herdadas do `env.example` continuam válidas (SMTP, Discord, e
 npm run bot     # Inicia apenas a CLI
 npm run painel  # Inicia apenas o painel web (web/server.js)
 npm run dev     # Executa CLI + painel simultaneamente
+install-bot.bat # (Windows) prepara .env e instala dependências
+start-bot.bat   # (Windows) inicia CLI e/ou painel com menu interativo
+
 ```
 
 ## 💡 Dicas e suporte

@@ -287,7 +287,9 @@ async function assertUniqueFields({ email, username, discordId, rep4repId }, { i
   }
 }
 
+async function createUserRecord(data, { defaultStatus = 'pending', allowRoleOverride = true } = {}) {
 async function createUserRecord(data, { defaultStatus = 'pending' } = {}) {
+
   await ensureDataFile();
 
   const username = requireString(data.username, 'Informe um username.');
@@ -300,7 +302,11 @@ async function createUserRecord(data, { defaultStatus = 'pending' } = {}) {
   const phoneNumber = normalizePhone(data.phoneNumber || data.whatsapp || data.phone);
   const rep4repKey = normalizeString(data.rep4repKey || '');
   const credits = Number.isFinite(Number(data.credits)) ? Math.max(0, Math.round(Number(data.credits))) : 0;
-  const role = normalizeString(data.role) || 'customer';
+  const requestedRole = normalizeString(data.role);
+  const roleCandidates = new Set(['customer', 'admin']);
+  const role = allowRoleOverride && requestedRole && roleCandidates.has(requestedRole)
+    ? requestedRole
+    : 'customer';
   const status = normalizeString(data.status) || defaultStatus || 'pending';
 
   await assertUniqueFields(
@@ -346,11 +352,17 @@ async function createUserRecord(data, { defaultStatus = 'pending' } = {}) {
 }
 
 async function createUser(data = {}) {
-  return createUserRecord({ ...data, status: data.status || 'active' }, { defaultStatus: 'active' });
+  return createUserRecord(
+    { ...data, status: data.status || 'active' },
+    { defaultStatus: 'active', allowRoleOverride: true },
+  );
 }
 
 async function registerUser(data = {}) {
-  return createUserRecord({ ...data, credits: 0, status: 'pending' }, { defaultStatus: 'pending' });
+  return createUserRecord(
+    { ...data, credits: 0, status: 'pending', role: 'customer' },
+    { defaultStatus: 'pending', allowRoleOverride: false },
+  );
 }
 
 async function updateUser(id, updates = {}) {
@@ -395,7 +407,11 @@ async function updateUser(id, updates = {}) {
     next.status = value;
   }
   if (updates.role !== undefined) {
-    next.role = normalizeString(updates.role) || current.role;
+    const value = normalizeString(updates.role);
+    if (value && !['customer', 'admin'].includes(value)) {
+      throw new Error('Nível de acesso inválido.');
+    }
+    next.role = value || current.role;
   }
   if (updates.credits !== undefined) {
     const creditsValue = Number(updates.credits);
