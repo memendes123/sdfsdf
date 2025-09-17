@@ -10,7 +10,7 @@
     <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
-    <% const base = typeof baseUrl !== 'undefined' ? baseUrl : ''; %>
+    <% const baseHref = typeof basePath !== 'undefined' ? basePath : (typeof baseUrl !== 'undefined' ? baseUrl : ''); %>
     <div class="app-shell">
         <header class="app-header">
             <div class="brand">
@@ -22,8 +22,8 @@
             </div>
             <div class="app-header__right">
                 <nav class="app-nav">
-                    <a href="<%= base %>/" class="app-nav__link <%= page === 'dashboard' ? 'is-active' : '' %>">Dashboard</a>
-                    <a href="<%= base %>/logs" class="app-nav__link <%= page === 'logs' ? 'is-active' : '' %>">Logs</a>
+                    <a href="<%= baseHref %>/" class="app-nav__link <%= page === 'dashboard' ? 'is-active' : '' %>">Dashboard</a>
+                    <a href="<%= baseHref %>/logs" class="app-nav__link <%= page === 'logs' ? 'is-active' : '' %>">Logs</a>
                 </nav>
                 <div class="language-switch" data-language-switch>
                     <button type="button" class="btn btn--ghost" data-translate-toggle aria-haspopup="true" aria-expanded="false">
