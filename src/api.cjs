@@ -1,6 +1,9 @@
 require("dotenv").config();
-const fetch = require("node-fetch");
 const { FormData } = require("formdata-node");
+
+const fetchFn = globalThis.fetch
+  ? (...args) => globalThis.fetch(...args)
+  : (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
 class ApiWrapper {
   constructor() {
@@ -28,7 +31,7 @@ class ApiWrapper {
 
     for (let attempts = 0; attempts < maxAttempts; attempts++) {
       try {
-        const response = await fetch(url, options);
+        const response = await fetchFn(url, options);
         const text = await response.text();
 
         try {
@@ -53,6 +56,13 @@ class ApiWrapper {
 
   async addSteamProfile(steamId) {
     return await this.fetchWithJsonCheck(`${this.url}/user/steamprofiles/add`, {
+      method: "POST",
+      body: this.buildForm({ steamProfile: steamId }),
+    });
+  }
+
+  async removeSteamProfile(steamId) {
+    return await this.fetchWithJsonCheck(`${this.url}/user/steamprofiles/remove`, {
       method: "POST",
       body: this.buildForm({ steamProfile: steamId }),
     });
