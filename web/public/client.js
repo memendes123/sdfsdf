@@ -13,6 +13,7 @@
   const discordEl = document.querySelector('[data-client-discord]');
   const rep4repEl = document.querySelector('[data-client-rep4rep]');
   const phoneEl = document.querySelector('[data-client-phone]');
+  const webhookEl = document.querySelector('[data-client-webhook]');
   const statusHintEl = document.querySelector('[data-client-status-hint]');
   const logoutButton = document.querySelector('[data-logout]');
   const toastEl = document.querySelector('[data-client-toast]');
@@ -145,12 +146,17 @@
     if (discordEl) discordEl.textContent = user.discordId || '--';
     if (rep4repEl) rep4repEl.textContent = user.rep4repId || '--';
     if (phoneEl) phoneEl.textContent = user.phoneNumber || '--';
+    if (webhookEl) webhookEl.textContent = user.discordWebhookUrl ? 'Configurado' : '—';
     if (creditsEl) creditsEl.textContent = Number.isFinite(user.credits) ? user.credits : 0;
     updateStatusBadge(user.status);
     if (keyForm) {
       const input = keyForm.querySelector('input[name="rep4repKey"]');
       if (input) {
         input.value = user.rep4repKey || '';
+      }
+      const webhookInput = keyForm.querySelector('input[name="discordWebhookUrl"]');
+      if (webhookInput) {
+        webhookInput.value = user.discordWebhookUrl || '';
       }
     }
 
@@ -374,7 +380,7 @@
         if (data?.user) {
           updateDashboard({ ...state.user, ...data.user });
         }
-        showToast('Key atualizada com sucesso.');
+        showToast('Configurações salvas com sucesso.');
       } catch (error) {
         showToast(error.message || 'Não foi possível salvar a key.', 'error');
       } finally {

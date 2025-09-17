@@ -2,6 +2,7 @@ const fs = require('fs/promises');
 const path = require('path');
 const { randomUUID, randomBytes, pbkdf2, timingSafeEqual } = require('crypto');
 const { promisify } = require('util');
+const { URL } = require('url');
 
 const db = require('../../src/db.cjs');
 
@@ -54,6 +55,28 @@ function normalizePhone(value) {
     return `+${text}`;
   }
   return text;
+}
+
+function normalizeDiscordWebhookUrl(value) {
+  const text = normalizeString(value);
+  if (!text) {
+    return '';
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(text);
+  } catch (error) {
+    throw new Error('Informe uma URL válida para o webhook do Discord.');
+  }
+
+  const normalized = parsed.toString();
+  const allowedPattern = /^https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/api\/webhooks\//i;
+  if (!allowedPattern.test(normalized)) {
+    throw new Error('O webhook deve começar com https://discord.com/api/webhooks/.');
+  }
+
+  return normalized;
 }
 
 function requireString(value, message) {
@@ -111,6 +134,7 @@ function sanitizeUser(row) {
     discordId: row.discordId,
     rep4repId: row.rep4repId,
     rep4repKey: row.rep4repKey,
+    discordWebhookUrl: row.discordWebhookUrl,
     phoneNumber: row.phoneNumber,
     credits: row.credits,
     role: row.role,
@@ -288,7 +312,6 @@ async function assertUniqueFields({ email, username, discordId, rep4repId }, { i
 }
 
 async function createUserRecord(data, { defaultStatus = 'pending', allowRoleOverride = true } = {}) {
-async function createUserRecord(data, { defaultStatus = 'pending' } = {}) {
 
   await ensureDataFile();
 
@@ -302,6 +325,9 @@ async function createUserRecord(data, { defaultStatus = 'pending' } = {}) {
   const phoneNumber = normalizePhone(data.phoneNumber || data.whatsapp || data.phone);
   const rep4repKey = normalizeString(data.rep4repKey || '');
   const credits = Number.isFinite(Number(data.credits)) ? Math.max(0, Math.round(Number(data.credits))) : 0;
+  const discordWebhookUrl = normalizeDiscordWebhookUrl(
+    data.discordWebhookUrl || data.webhookUrl || data.webhook || data.discordWebhook,
+  );
   const requestedRole = normalizeString(data.role);
   const roleCandidates = new Set(['customer', 'admin']);
   const role = allowRoleOverride && requestedRole && roleCandidates.has(requestedRole)
@@ -323,9 +349,9 @@ async function createUserRecord(data, { defaultStatus = 'pending' } = {}) {
   await connection.run(
     `INSERT INTO app_user (
       id, username, fullName, email, passwordHash, passwordSalt,
-      dateOfBirth, discordId, rep4repId, rep4repKey, phoneNumber, credits,
+      dateOfBirth, discordId, rep4repId, rep4repKey, discordWebhookUrl, phoneNumber, credits,
       apiToken, role, status, createdAt, updatedAt
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       username,
@@ -337,6 +363,7 @@ async function createUserRecord(data, { defaultStatus = 'pending' } = {}) {
       discordId,
       rep4repId,
       rep4repKey,
+      discordWebhookUrl,
       phoneNumber,
       credits,
       apiToken,
@@ -392,6 +419,9 @@ async function updateUser(id, updates = {}) {
   }
   if (updates.rep4repKey !== undefined) {
     next.rep4repKey = normalizeString(updates.rep4repKey);
+  }
+  if (updates.discordWebhookUrl !== undefined) {
+    next.discordWebhookUrl = normalizeDiscordWebhookUrl(updates.discordWebhookUrl);
   }
   if (updates.dateOfBirth !== undefined) {
     next.dateOfBirth = normalizeDate(updates.dateOfBirth);
@@ -449,6 +479,7 @@ async function updateUser(id, updates = {}) {
       discordId = ?,
       rep4repId = ?,
       rep4repKey = ?,
+      discordWebhookUrl = ?,
       phoneNumber = ?,
       credits = ?,
       role = ?,
@@ -465,6 +496,7 @@ async function updateUser(id, updates = {}) {
       next.discordId,
       next.rep4repId,
       next.rep4repKey,
+      next.discordWebhookUrl,
       next.phoneNumber,
       next.credits,
       next.role,
@@ -590,7 +622,7 @@ async function loginUser({ identifier, password }) {
   return sanitizeUser({ ...row, lastLoginAt, updatedAt: lastLoginAt });
 }
 
-async function updateRep4repKey(id, rep4repKey) {
+async function updateClientSettings(id, updates = {}) {
   await ensureDataFile();
   const connection = await db.getConnection();
   const current = await connection.get(`SELECT * FROM app_user WHERE id = ?`, [id]);
@@ -598,10 +630,35 @@ async function updateRep4repKey(id, rep4repKey) {
     throw new Error('Usuário não encontrado.');
   }
 
-  const key = normalizeString(rep4repKey);
-  const updatedAt = new Date().toISOString();
-  await connection.run(`UPDATE app_user SET rep4repKey = ?, updatedAt = ? WHERE id = ?`, [key, updatedAt, id]);
-  return sanitizeUser({ ...current, rep4repKey: key, updatedAt });
+  const next = { ...current };
+  let changed = false;
+
+  if (Object.prototype.hasOwnProperty.call(updates, 'rep4repKey')) {
+    next.rep4repKey = normalizeString(updates.rep4repKey);
+    changed = true;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(updates, 'discordWebhookUrl')) {
+    next.discordWebhookUrl = normalizeDiscordWebhookUrl(updates.discordWebhookUrl);
+    changed = true;
+  }
+
+  if (!changed) {
+    throw new Error('Nada para atualizar.');
+  }
+
+  next.updatedAt = new Date().toISOString();
+
+  await connection.run(
+    `UPDATE app_user SET rep4repKey = ?, discordWebhookUrl = ?, updatedAt = ? WHERE id = ?`,
+    [next.rep4repKey, next.discordWebhookUrl, next.updatedAt, id],
+  );
+
+  return sanitizeUser(next);
+}
+
+async function updateRep4repKey(id, rep4repKey) {
+  return updateClientSettings(id, { rep4repKey });
 }
 
 async function findActiveAdmin() {
@@ -626,6 +683,7 @@ module.exports = {
   authenticateUser,
   rotateApiToken,
   loginUser,
+  updateClientSettings,
   updateRep4repKey,
   findActiveAdmin,
 };

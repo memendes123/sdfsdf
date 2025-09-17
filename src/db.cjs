@@ -94,13 +94,20 @@ class DbWrapper {
         status TEXT NOT NULL DEFAULT 'pending',
         lastLoginAt TEXT,
         createdAt TEXT NOT NULL,
-        updatedAt TEXT NOT NULL
+        updatedAt TEXT NOT NULL,
+        discordWebhookUrl TEXT DEFAULT ''
       )
     `);
 
     await this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_app_user_status ON app_user(status)
     `);
+
+    const columns = await this.db.all(`PRAGMA table_info(app_user)`);
+    const hasWebhookColumn = columns.some((column) => column.name === 'discordWebhookUrl');
+    if (!hasWebhookColumn) {
+      await this.db.exec(`ALTER TABLE app_user ADD COLUMN discordWebhookUrl TEXT DEFAULT ''`);
+    }
   }
 
   async _createRunQueueTable() {

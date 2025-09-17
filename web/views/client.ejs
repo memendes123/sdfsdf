@@ -76,6 +76,10 @@
                         <span>Telefone / WhatsApp (com DDI)</span>
                         <input type="tel" name="phoneNumber" placeholder="+351900000000" required />
                     </label>
+                    <label>
+                        <span>Webhook do Discord (opcional)</span>
+                        <input type="url" name="discordWebhookUrl" placeholder="https://discord.com/api/webhooks/..." />
+                    </label>
                     <p class="client-smallprint">Ao enviar você confirma que leu e aceita os termos de uso fornecidos pelo administrador.</p>
                     <button type="submit" class="btn btn--primary">Enviar cadastro</button>
                 </form>
@@ -109,6 +113,10 @@
                             <dd data-client-phone>--</dd>
                         </div>
                         <div>
+                            <dt>Webhook do Discord</dt>
+                            <dd data-client-webhook>—</dd>
+                        </div>
+                        <div>
                             <dt>Créditos disponíveis</dt>
                             <dd class="client-credits" data-client-credits>0</dd>
                         </div>
@@ -122,6 +130,10 @@
                         <label>
                             <span>Sua chave Rep4Rep</span>
                             <input type="text" name="rep4repKey" placeholder="Cole aqui a key fornecida pelo Rep4Rep" />
+                        </label>
+                        <label>
+                            <span>Webhook do Discord</span>
+                            <input type="url" name="discordWebhookUrl" placeholder="https://discord.com/api/webhooks/..." />
                         </label>
                         <button type="submit" class="btn btn--secondary">Guardar key</button>
                     </form>

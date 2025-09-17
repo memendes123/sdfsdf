@@ -57,6 +57,10 @@ function mapQueueRowWithUser(row, { includeSensitive = false } = {}) {
     job.user.credits = Number(row.userCredits);
   }
 
+  if (Object.prototype.hasOwnProperty.call(row, 'userDiscordWebhookUrl')) {
+    job.user.discordWebhookUrl = row.userDiscordWebhookUrl || '';
+  }
+
   if (includeSensitive && Object.prototype.hasOwnProperty.call(row, 'userRep4repKey')) {
     job.user.rep4repKey = row.userRep4repKey || '';
   }
@@ -80,6 +84,7 @@ async function enqueueJob({ userId, command = 'autoRun', maxCommentsPerAccount =
   const connection = await db.getConnection();
   const existing = await connection.get(
     `SELECT q.*, u.username AS userUsername, u.fullName AS userFullName, u.role AS userRole, u.status AS userStatus,
+            u.discordWebhookUrl AS userDiscordWebhookUrl,
             u.credits AS userCredits
        FROM run_queue q
        LEFT JOIN app_user u ON u.id = q.userId
@@ -106,6 +111,7 @@ async function enqueueJob({ userId, command = 'autoRun', maxCommentsPerAccount =
 
   const inserted = await connection.get(
     `SELECT q.*, u.username AS userUsername, u.fullName AS userFullName, u.role AS userRole, u.status AS userStatus,
+            u.discordWebhookUrl AS userDiscordWebhookUrl,
             u.credits AS userCredits
        FROM run_queue q
        LEFT JOIN app_user u ON u.id = q.userId
@@ -145,7 +151,8 @@ async function getUserQueueStatus(userId) {
   const connection = await db.getConnection();
   const row = await connection.get(
     `SELECT q.*, u.username AS userUsername, u.fullName AS userFullName, u.role AS userRole,
-            u.status AS userStatus, u.credits AS userCredits
+            u.status AS userStatus, u.discordWebhookUrl AS userDiscordWebhookUrl,
+            u.credits AS userCredits
        FROM run_queue q
        LEFT JOIN app_user u ON u.id = q.userId
       WHERE q.userId = ? AND q.status IN ('pending','running')
@@ -228,7 +235,8 @@ async function getQueueSnapshot() {
   const connection = await db.getConnection();
   const activeRows = await connection.all(
     `SELECT q.*, u.username AS userUsername, u.fullName AS userFullName, u.role AS userRole,
-            u.status AS userStatus, u.credits AS userCredits
+            u.status AS userStatus, u.discordWebhookUrl AS userDiscordWebhookUrl,
+            u.credits AS userCredits
        FROM run_queue q
        LEFT JOIN app_user u ON u.id = q.userId
       WHERE q.status IN ('pending','running')
@@ -242,10 +250,11 @@ async function getQueueSnapshot() {
   });
 
   const historyRows = await connection.all(
-    `SELECT q.*, u.username AS userUsername, u.fullName AS userFullName
+    `SELECT q.*, u.username AS userUsername, u.fullName AS userFullName,
+            u.discordWebhookUrl AS userDiscordWebhookUrl
        FROM run_queue q
        LEFT JOIN app_user u ON u.id = q.userId
-      WHERE q.status IN ('completed','failed')
+      WHERE q.status IN ('completed','failed','cancelled')
       ORDER BY datetime(q.finishedAt) DESC
       LIMIT 10`,
   );
@@ -265,7 +274,8 @@ async function takeNextPendingJob() {
   const connection = await db.getConnection();
   const row = await connection.get(
     `SELECT q.*, u.username AS userUsername, u.fullName AS userFullName, u.role AS userRole,
-            u.status AS userStatus, u.credits AS userCredits, u.rep4repKey AS userRep4repKey
+            u.status AS userStatus, u.discordWebhookUrl AS userDiscordWebhookUrl,
+            u.credits AS userCredits, u.rep4repKey AS userRep4repKey
        FROM run_queue q
        JOIN app_user u ON u.id = q.userId
       WHERE q.status = 'pending'
@@ -331,7 +341,8 @@ async function completeJob(id, { summary = null, cleanup = null, creditsConsumed
   );
 
   return connection.get(
-    `SELECT q.*, u.username AS userUsername, u.fullName AS userFullName
+    `SELECT q.*, u.username AS userUsername, u.fullName AS userFullName,
+            u.discordWebhookUrl AS userDiscordWebhookUrl
        FROM run_queue q
        LEFT JOIN app_user u ON u.id = q.userId
       WHERE q.id = ?`,
@@ -365,7 +376,8 @@ async function failJob(id, errorMessage) {
   );
 
   return connection.get(
-    `SELECT q.*, u.username AS userUsername, u.fullName AS userFullName
+    `SELECT q.*, u.username AS userUsername, u.fullName AS userFullName,
+            u.discordWebhookUrl AS userDiscordWebhookUrl
        FROM run_queue q
        LEFT JOIN app_user u ON u.id = q.userId
       WHERE q.id = ?`,
@@ -373,14 +385,66 @@ async function failJob(id, errorMessage) {
   ).then((row) => mapQueueRowWithUser(row));
 }
 
+async function cancelJob(id, { reason = 'Cancelado manualmente' } = {}) {
+  if (!id) {
+    throw new Error('ID do pedido obrigatório para cancelar.');
+  }
+
+  const connection = await db.getConnection();
+  const row = await connection.get(
+    `SELECT q.*, u.username AS userUsername, u.fullName AS userFullName, u.role AS userRole,
+            u.status AS userStatus, u.discordWebhookUrl AS userDiscordWebhookUrl,
+            u.credits AS userCredits
+       FROM run_queue q
+       LEFT JOIN app_user u ON u.id = q.userId
+      WHERE q.id = ?`,
+    [id],
+  );
+
+  if (!row) {
+    throw new Error('Pedido não encontrado.');
+  }
+
+  if (row.status === 'running') {
+    throw new Error('Não é possível cancelar pedidos em execução.');
+  }
+
+  if (row.status !== 'pending') {
+    return { cancelled: false, job: mapQueueRowWithUser(row) };
+  }
+
+  const finishedAt = new Date().toISOString();
+  await connection.run(
+    `UPDATE run_queue
+        SET status = 'cancelled',
+            finishedAt = ?,
+            durationMs = 0,
+            error = ?
+      WHERE id = ?`,
+    [finishedAt, reason || 'Cancelado manualmente', id],
+  );
+
+  const updated = await connection.get(
+    `SELECT q.*, u.username AS userUsername, u.fullName AS userFullName, u.role AS userRole,
+            u.status AS userStatus, u.discordWebhookUrl AS userDiscordWebhookUrl,
+            u.credits AS userCredits
+       FROM run_queue q
+       LEFT JOIN app_user u ON u.id = q.userId
+      WHERE q.id = ?`,
+    [id],
+  );
+
+  return { cancelled: true, job: mapQueueRowWithUser(updated) };
+}
+
 async function clearCompleted({ maxEntries = 100 } = {}) {
   const connection = await db.getConnection();
   await connection.run(
     `DELETE FROM run_queue
-      WHERE status IN ('completed','failed')
+      WHERE status IN ('completed','failed','cancelled')
         AND id NOT IN (
           SELECT id FROM run_queue
-           WHERE status IN ('completed','failed')
+           WHERE status IN ('completed','failed','cancelled')
            ORDER BY datetime(finishedAt) DESC
            LIMIT ?
         )`,
@@ -395,5 +459,6 @@ module.exports = {
   takeNextPendingJob,
   completeJob,
   failJob,
+  cancelJob,
   clearCompleted,
 };
