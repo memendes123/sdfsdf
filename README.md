@@ -115,6 +115,7 @@ O servidor Express roda em `http://localhost:3000` (ajustável via `PORT`). A ro
 - Estão disponíveis traduções instantâneas para português, inglês, espanhol, francês, italiano e alemão sem recarregar a página.
 - A interface do widget segue o tema escuro do painel e pode ser recolhida para não interferir no fluxo de trabalho.
 
+
 ## 🔐 Armazenamento e segurança
 - Usuários e perfis ficam no SQLite (`steamprofiles.db`). Senhas são protegidas com PBKDF2 (sal + hash) e tokens API são UUIDs aleatórios.
 - O arquivo `data/users.json` é mantido apenas como **backup legado**: as senhas não aparecem ali por segurança. Após a migração todos os campos sensíveis permanecem somente no banco criptografado.
