@@ -144,6 +144,14 @@
         meta.appendChild(phoneBadge);
       }
 
+      if (user.discordWebhookUrl) {
+        const webhookBadge = document.createElement('span');
+        webhookBadge.className = 'badge badge--muted';
+        webhookBadge.textContent = 'Webhook ativo';
+        webhookBadge.title = user.discordWebhookUrl;
+        meta.appendChild(webhookBadge);
+      }
+
       nameCell.appendChild(identification);
       nameCell.appendChild(meta);
 
@@ -533,6 +541,7 @@
     setValue('discordId', user.discordId || '');
     setValue('rep4repId', user.rep4repId || '');
     setValue('rep4repKey', user.rep4repKey || '');
+    setValue('discordWebhookUrl', user.discordWebhookUrl || '');
     setValue('dateOfBirth', user.dateOfBirth || '');
     setValue('credits', Number.isFinite(user.credits) ? user.credits : 0);
     setValue('status', user.status || 'pending');

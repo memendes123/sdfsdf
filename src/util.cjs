@@ -73,6 +73,7 @@ const keepAliveState = {
   lastError: null,
   runs: 0,
   ownerToken: null,
+  ownerWebhookUrl: null,
 };
 
 const statusMessage = {
@@ -125,6 +126,10 @@ function logInvalidAccount(username, reason) {
   fs.appendFileSync(logFile, line);
 }
 
+async function sendDiscordWebhook(payload = {}, options = {}) {
+  const overrideUrl = (options.overrideUrl || options.webhookUrl || '').trim();
+  const targetUrl = overrideUrl || DISCORD_WEBHOOK_URL;
+  if (!targetUrl) {
 async function sendDiscordWebhook(payload = {}) {
   if (!DISCORD_WEBHOOK_URL) {
     return false;
@@ -132,6 +137,18 @@ async function sendDiscordWebhook(payload = {}) {
 
   try {
     const fetch = await resolveFetch();
+    const username = options.username || DISCORD_WEBHOOK_USERNAME;
+    const avatarUrl =
+      options.avatarUrl === null
+        ? undefined
+        : options.avatarUrl || DISCORD_WEBHOOK_AVATAR_URL || undefined;
+    const body = {
+      username,
+      ...(avatarUrl ? { avatar_url: avatarUrl } : {}),
+      ...payload,
+    };
+
+    const response = await fetch(targetUrl, {
     const body = {
       username: DISCORD_WEBHOOK_USERNAME,
       ...(DISCORD_WEBHOOK_AVATAR_URL ? { avatar_url: DISCORD_WEBHOOK_AVATAR_URL } : {}),
@@ -144,6 +161,8 @@ async function sendDiscordWebhook(payload = {}) {
       body: JSON.stringify(body),
     });
 
+    const targetLabel = overrideUrl ? ' (customizado)' : '';
+
     if (!response.ok) {
       let details = '';
       try {
@@ -153,6 +172,7 @@ async function sendDiscordWebhook(payload = {}) {
       }
       const snippet = details ? details.slice(0, 140) : '';
       log(
+        `⚠️ Webhook do Discord${targetLabel} respondeu com status ${response.status}${
         `⚠️ Webhook do Discord respondeu com status ${response.status}${
           snippet ? ` – ${snippet}` : ''
         }`,
@@ -162,6 +182,8 @@ async function sendDiscordWebhook(payload = {}) {
 
     return true;
   } catch (error) {
+    const targetLabel = overrideUrl ? ' (customizado)' : '';
+    log(`⚠️ Falha ao enviar webhook do Discord${targetLabel}: ${error.message}`);
     log(`⚠️ Falha ao enviar webhook do Discord: ${error.message}`);
     return false;
   }
@@ -211,6 +233,10 @@ function summarizePerAccount(perAccount = []) {
 }
 
 async function announceQueueEvent(event = {}) {
+  const job = event.job || null;
+  const client = event.client || job?.user || null;
+  const clientLabel = formatClientLabel(client);
+  const clientWebhookUrl = (client?.discordWebhookUrl || '').trim();
   if (!DISCORD_WEBHOOK_URL) {
     return false;
   }
@@ -276,6 +302,46 @@ async function announceQueueEvent(event = {}) {
       return false;
   }
 
+  const payload = { embeds: [embed] };
+  const targets = new Set();
+
+  if (DISCORD_WEBHOOK_URL) {
+    targets.add(DISCORD_WEBHOOK_URL);
+  }
+
+  if (clientWebhookUrl) {
+    targets.add(clientWebhookUrl);
+  }
+
+  if (event.webhookUrl) {
+    const explicitUrl = String(event.webhookUrl).trim();
+    if (explicitUrl) {
+      targets.add(explicitUrl);
+    }
+  }
+
+  if (!targets.size) {
+    return false;
+  }
+
+  const deliveries = [];
+  for (const url of targets) {
+    if (!url) {
+      continue;
+    }
+    if (DISCORD_WEBHOOK_URL && url === DISCORD_WEBHOOK_URL) {
+      deliveries.push(sendDiscordWebhook(payload));
+    } else {
+      deliveries.push(sendDiscordWebhook(payload, { overrideUrl: url }));
+    }
+  }
+
+  if (!deliveries.length) {
+    return false;
+  }
+
+  const results = await Promise.allSettled(deliveries);
+  return results.some((result) => result.status === 'fulfilled' && result.value === true);
   return sendDiscordWebhook({ embeds: [embed] });
 }
 
@@ -1084,6 +1150,8 @@ async function removeProfile(username, options = {}) {
 async function prioritizedAutoRun(options = {}) {
   const {
     ownerToken = process.env.REP4REP_KEY ?? null,
+    ownerWebhookUrl = null,
+    ownerUser = null,
     maxCommentsPerAccount = MAX_COMMENTS_PER_RUN,
     accountLimit = 100,
     clientFilter,
@@ -1105,6 +1173,7 @@ async function prioritizedAutoRun(options = {}) {
     try {
       const summary = await autoRun({ ...baseRunOptions, apiToken: ownerToken });
       result.owner = summary;
+      await announceQueueEvent({ type: 'owner.completed', summary, webhookUrl: ownerWebhookUrl, client: ownerUser });
       await announceQueueEvent({ type: 'owner.completed', summary });
       if (summary.totalComments > 0) {
         log('Pedidos do proprietário atendidos. Continuando com a fila de clientes.');
@@ -1408,6 +1477,15 @@ async function startKeepAliveLoop(options = {}) {
     ...options.runOptions,
   };
 
+  if (options.ownerWebhookUrl && !runOptions.ownerWebhookUrl) {
+    runOptions.ownerWebhookUrl = options.ownerWebhookUrl;
+  }
+  if (options.ownerUser && !runOptions.ownerUser) {
+    runOptions.ownerUser = options.ownerUser;
+  }
+
+  keepAliveState.ownerWebhookUrl = runOptions.ownerWebhookUrl || null;
+
   const loop = async () => {
     while (!keepAliveState.stopRequested) {
       try {
@@ -1478,6 +1556,7 @@ function getKeepAliveStatus() {
     runs: keepAliveState.runs,
     lastError: keepAliveState.lastError,
     ownerTokenDefined: Boolean(keepAliveState.ownerToken),
+    ownerWebhookDefined: Boolean(keepAliveState.ownerWebhookUrl),
   };
 }
 

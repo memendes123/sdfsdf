@@ -146,6 +146,8 @@ router.post('/api/run', async (req, res) => {
 
       const summary = await prioritizedAutoRun({
         ownerToken: adminUser.rep4repKey,
+        ownerWebhookUrl: adminUser.discordWebhookUrl,
+        ownerUser: adminUser,
         accountLimit: 100,
         maxCommentsPerAccount: 1000,
         clientFilter: (user) => user.role !== 'admin',
@@ -169,7 +171,11 @@ router.post('/api/run', async (req, res) => {
       if (!adminUser || !adminUser.rep4repKey) {
         throw new Error('Defina a chave Rep4Rep na conta admin para iniciar o vigia.');
       }
-      const result = await startKeepAliveLoop({ ownerToken: adminUser.rep4repKey });
+      const result = await startKeepAliveLoop({
+        ownerToken: adminUser.rep4repKey,
+        ownerWebhookUrl: adminUser.discordWebhookUrl,
+        ownerUser: adminUser,
+      });
       const status = getKeepAliveStatus();
       const message = result.alreadyRunning
         ? '⚠️ O modo vigia já está ativo.'

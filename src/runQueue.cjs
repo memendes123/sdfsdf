@@ -57,6 +57,10 @@ function mapQueueRowWithUser(row, { includeSensitive = false } = {}) {
     job.user.credits = Number(row.userCredits);
   }
 
+  if (Object.prototype.hasOwnProperty.call(row, 'userDiscordWebhookUrl')) {
+    job.user.discordWebhookUrl = row.userDiscordWebhookUrl || '';
+  }
+
   if (includeSensitive && Object.prototype.hasOwnProperty.call(row, 'userRep4repKey')) {
     job.user.rep4repKey = row.userRep4repKey || '';
   }
@@ -80,6 +84,7 @@ async function enqueueJob({ userId, command = 'autoRun', maxCommentsPerAccount =
   const connection = await db.getConnection();
   const existing = await connection.get(
     `SELECT q.*, u.username AS userUsername, u.fullName AS userFullName, u.role AS userRole, u.status AS userStatus,
+            u.discordWebhookUrl AS userDiscordWebhookUrl,
             u.credits AS userCredits
        FROM run_queue q
        LEFT JOIN app_user u ON u.id = q.userId
@@ -106,6 +111,7 @@ async function enqueueJob({ userId, command = 'autoRun', maxCommentsPerAccount =
 
   const inserted = await connection.get(
     `SELECT q.*, u.username AS userUsername, u.fullName AS userFullName, u.role AS userRole, u.status AS userStatus,
+            u.discordWebhookUrl AS userDiscordWebhookUrl,
             u.credits AS userCredits
        FROM run_queue q
        LEFT JOIN app_user u ON u.id = q.userId
@@ -145,7 +151,8 @@ async function getUserQueueStatus(userId) {
   const connection = await db.getConnection();
   const row = await connection.get(
     `SELECT q.*, u.username AS userUsername, u.fullName AS userFullName, u.role AS userRole,
-            u.status AS userStatus, u.credits AS userCredits
+            u.status AS userStatus, u.discordWebhookUrl AS userDiscordWebhookUrl,
+            u.credits AS userCredits
        FROM run_queue q
        LEFT JOIN app_user u ON u.id = q.userId
       WHERE q.userId = ? AND q.status IN ('pending','running')
@@ -228,7 +235,8 @@ async function getQueueSnapshot() {
   const connection = await db.getConnection();
   const activeRows = await connection.all(
     `SELECT q.*, u.username AS userUsername, u.fullName AS userFullName, u.role AS userRole,
-            u.status AS userStatus, u.credits AS userCredits
+            u.status AS userStatus, u.discordWebhookUrl AS userDiscordWebhookUrl,
+            u.credits AS userCredits
        FROM run_queue q
        LEFT JOIN app_user u ON u.id = q.userId
       WHERE q.status IN ('pending','running')
@@ -242,7 +250,8 @@ async function getQueueSnapshot() {
   });
 
   const historyRows = await connection.all(
-    `SELECT q.*, u.username AS userUsername, u.fullName AS userFullName
+    `SELECT q.*, u.username AS userUsername, u.fullName AS userFullName,
+            u.discordWebhookUrl AS userDiscordWebhookUrl
        FROM run_queue q
        LEFT JOIN app_user u ON u.id = q.userId
       WHERE q.status IN ('completed','failed','cancelled')
@@ -265,7 +274,8 @@ async function takeNextPendingJob() {
   const connection = await db.getConnection();
   const row = await connection.get(
     `SELECT q.*, u.username AS userUsername, u.fullName AS userFullName, u.role AS userRole,
-            u.status AS userStatus, u.credits AS userCredits, u.rep4repKey AS userRep4repKey
+            u.status AS userStatus, u.discordWebhookUrl AS userDiscordWebhookUrl,
+            u.credits AS userCredits, u.rep4repKey AS userRep4repKey
        FROM run_queue q
        JOIN app_user u ON u.id = q.userId
       WHERE q.status = 'pending'
@@ -331,7 +341,8 @@ async function completeJob(id, { summary = null, cleanup = null, creditsConsumed
   );
 
   return connection.get(
-    `SELECT q.*, u.username AS userUsername, u.fullName AS userFullName
+    `SELECT q.*, u.username AS userUsername, u.fullName AS userFullName,
+            u.discordWebhookUrl AS userDiscordWebhookUrl
        FROM run_queue q
        LEFT JOIN app_user u ON u.id = q.userId
       WHERE q.id = ?`,
@@ -365,7 +376,8 @@ async function failJob(id, errorMessage) {
   );
 
   return connection.get(
-    `SELECT q.*, u.username AS userUsername, u.fullName AS userFullName
+    `SELECT q.*, u.username AS userUsername, u.fullName AS userFullName,
+            u.discordWebhookUrl AS userDiscordWebhookUrl
        FROM run_queue q
        LEFT JOIN app_user u ON u.id = q.userId
       WHERE q.id = ?`,
@@ -381,6 +393,8 @@ async function cancelJob(id, { reason = 'Cancelado manualmente' } = {}) {
   const connection = await db.getConnection();
   const row = await connection.get(
     `SELECT q.*, u.username AS userUsername, u.fullName AS userFullName, u.role AS userRole,
+            u.status AS userStatus, u.discordWebhookUrl AS userDiscordWebhookUrl,
+            u.credits AS userCredits
             u.status AS userStatus, u.credits AS userCredits
        FROM run_queue q
        LEFT JOIN app_user u ON u.id = q.userId
@@ -413,6 +427,8 @@ async function cancelJob(id, { reason = 'Cancelado manualmente' } = {}) {
 
   const updated = await connection.get(
     `SELECT q.*, u.username AS userUsername, u.fullName AS userFullName, u.role AS userRole,
+            u.status AS userStatus, u.discordWebhookUrl AS userDiscordWebhookUrl,
+            u.credits AS userCredits
             u.status AS userStatus, u.credits AS userCredits
        FROM run_queue q
        LEFT JOIN app_user u ON u.id = q.userId

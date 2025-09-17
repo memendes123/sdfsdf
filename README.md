@@ -13,10 +13,11 @@ Automação de comentários para Steam integrada ao [Rep4Rep.com](https://rep4re
    - [Acesso do administrador](#acesso-do-administrador)
    - [Portal do cliente](#portal-do-cliente)
    - [Créditos e permissões](#créditos-e-permissões)
-8. [Armazenamento e segurança](#-armazenamento-e-segurança)
-9. [Variáveis de ambiente](#-variáveis-de-ambiente)
-10. [Scripts disponíveis](#-scripts-disponíveis)
-11. [Dicas e suporte](#-dicas-e-suporte)
+8. [Notificações no Discord](#-notificações-no-discord)
+9. [Armazenamento e segurança](#-armazenamento-e-segurança)
+10. [Variáveis de ambiente](#-variáveis-de-ambiente)
+11. [Scripts disponíveis](#-scripts-disponíveis)
+12. [Dicas e suporte](#-dicas-e-suporte)
 
 ## 📌 Visão geral
 - `main.cjs` oferece a CLI completa para administrar contas, rodar execuções prioritárias e disparar o ciclo completo de adicionar ➜ comentar ➜ remover perfis.
@@ -47,7 +48,7 @@ Automação de comentários para Steam integrada ao [Rep4Rep.com](https://rep4re
 - Variáveis de ambiente configuradas (veja [Variáveis de ambiente](#-variáveis-de-ambiente)).
 
 ## ⚙️ Instalação e configuração
-1. Copie `env.example` para `.env` e ajuste credenciais, delays e limites desejados.
+1. Copie `env.example` para `.env` e ajuste credenciais, delays, limites desejados e (opcional) `DISCORD_WEBHOOK_URL` para ativar notificações globais.
 2. Instale dependências:
    ```bash
    npm install
@@ -114,7 +115,7 @@ O servidor Express roda em `http://localhost:3000` (ajustável via `PORT`). A ro
 5. O card **Modo VPS / Vigia** permite iniciar/parar o loop automático diretamente do painel e acompanha status, intervalo configurado e erros do ciclo.
 6. O card **Fila de execuções** mostra pedidos pendentes, histórico recente e permite atualizar a fila manualmente.
 7. Clique em **Gerenciar** na tabela de clientes para abrir o editor lateral e ajustar dados completos (status, créditos, key, telefone, role) sem editar código.
-6. Clique em **Gerenciar** na tabela de clientes para abrir o editor lateral e ajustar dados completos (status, créditos, key, telefone, role) sem editar código.
+8. Use o campo **Webhook do Discord** no editor para associar um canal específico aos avisos daquele usuário (ideal para o admin acompanhar execuções prioritárias).
 
 
 
@@ -122,6 +123,7 @@ O servidor Express roda em `http://localhost:3000` (ajustável via `PORT`). A ro
 - Cadastro exige nome completo, username, email, senha (≥ 8 caracteres), data de nascimento, Discord ID, Rep4Rep ID e telefone/WhatsApp com DDI.
 - Após o registro o status fica `pending`. O administrador precisa ativar e conceder créditos antes de liberar o botão **Rodar tarefas**.
 - Clientes autenticados visualizam créditos, status, token de API e podem atualizar a própria chave Rep4Rep.
+- Na seção **Key Rep4Rep e execução** existe um campo para o cliente colar o próprio *Webhook do Discord* e receber alertas individuais da fila.
 - Ao solicitar execução o pedido entra na fila; o painel mostra posição/estimativa em tempo real e o portal do cliente exibe o mesmo resumo com botão de atualizar status.
 
 ### Créditos e permissões
@@ -135,6 +137,12 @@ O servidor Express roda em `http://localhost:3000` (ajustável via `PORT`). A ro
 - Estão disponíveis traduções instantâneas para português, inglês, espanhol, francês, italiano e alemão sem recarregar a página.
 - A interface do widget segue o tema escuro do painel e pode ser recolhida para não interferir no fluxo de trabalho.
 
+## 🔔 Notificações no Discord
+- **Webhook global (.env):** defina `DISCORD_WEBHOOK_URL` no seu `.env` para que a CLI e o painel anunciem execuções prioritárias, conclusões, falhas e cancelamentos diretamente no canal escolhido. Use também `DISCORD_WEBHOOK_USERNAME` e `DISCORD_WEBHOOK_AVATAR_URL` para personalizar nome e avatar exibidos.
+- **Administrador:** no painel, abra o editor lateral do usuário admin e informe um *Webhook do Discord*. Quando esse campo estiver preenchido, você receberá notificações pessoais (além do webhook global) sempre que o autoRun prioritário ou a fila de clientes terminar, falhar ou for cancelada.
+- **Clientes:** o portal do cliente oferece um campo “Webhook do Discord” na área **Key Rep4Rep e execução**. Ao colar um link válido, o cliente recebe alertas individuais sobre o próprio pedido (concluído, cancelado ou com erro) sem depender do administrador.
+- O sistema evita duplicidade: se o webhook pessoal for igual ao global ele é enviado apenas uma vez por evento.
+
 ## 🔐 Armazenamento e segurança
 - Usuários e perfis ficam no SQLite (`steamprofiles.db`). Senhas são protegidas com PBKDF2 (sal + hash) e tokens API são UUIDs aleatórios.
 - O arquivo `data/users.json` é mantido apenas como **backup legado**: as senhas não aparecem ali por segurança. Após a migração todos os campos sensíveis permanecem somente no banco criptografado.
@@ -147,6 +155,8 @@ O servidor Express roda em `http://localhost:3000` (ajustável via `PORT`). A ro
 | `MAX_COMMENTS_PER_RUN` | Limite por conta (cortado automaticamente em 1000). |
 | `LOGIN_DELAY` / `COMMENT_DELAY` | Delays (ms) entre logins e comentários. |
 | `PANEL_USERNAME` / `PANEL_PASSWORD` | Credenciais do Basic Auth do painel. |
+| `DISCORD_WEBHOOK_URL` | Webhook global usado por CLI e painel para avisos de fila. |
+| `DISCORD_WEBHOOK_USERNAME` / `DISCORD_WEBHOOK_AVATAR_URL` | Personalize o nome/avatar exibidos no Discord (opcional). |
 | `PORT` | Porta HTTP do painel (padrão `3000`). |
 | `DATABASE_PATH` | Caminho alternativo para o `steamprofiles.db` (opcional). |
 | `KEEPALIVE_INTERVAL_MINUTES` | Intervalo (min) entre ciclos do modo vigia automático (mínimo 5). |

@@ -85,6 +85,7 @@ router.post('/login', async (req, res) => {
         discordId: user.discordId,
         rep4repId: user.rep4repId,
         rep4repKey: user.rep4repKey,
+        discordWebhookUrl: user.discordWebhookUrl,
         phoneNumber: user.phoneNumber,
         dateOfBirth: user.dateOfBirth,
       },
@@ -124,6 +125,7 @@ router.get('/me', async (req, res) => {
       discordId: user.discordId,
       rep4repId: user.rep4repId,
       rep4repKey: user.rep4repKey,
+      discordWebhookUrl: user.discordWebhookUrl,
       phoneNumber: user.phoneNumber,
       dateOfBirth: user.dateOfBirth,
       lastLoginAt: user.lastLoginAt,
@@ -132,14 +134,18 @@ router.get('/me', async (req, res) => {
 });
 
 router.patch('/me', async (req, res) => {
-  const { rep4repKey } = req.body || {};
-  if (rep4repKey === undefined) {
+  const { rep4repKey, discordWebhookUrl } = req.body || {};
+  if (rep4repKey === undefined && discordWebhookUrl === undefined) {
     return res.status(400).json({ success: false, error: 'Nada para atualizar.' });
   }
 
   try {
-    const updated = await userStore.updateRep4repKey(req.user.id, rep4repKey);
-    res.json({ success: true, user: { ...updated, apiToken: undefined } });
+    const updated = await userStore.updateClientSettings(req.user.id, {
+      rep4repKey,
+      discordWebhookUrl,
+    });
+    const { apiToken, ...safeUser } = updated || {};
+    res.json({ success: true, user: safeUser });
   } catch (error) {
     res.status(400).json({ success: false, error: error.message });
   }
