@@ -63,7 +63,6 @@ function logInvalidAccount(username, reason) {
 }
 
 function removeFromAccountsFile(username) {
-
     if (!fs.existsSync(ACCOUNTS_PATH)) {
         return;
     }
@@ -347,6 +346,18 @@ async function autoRunComments(profile, client, tasks, authorSteamProfileId, max
                 log(`[${profile.username}] falha ao confirmar tarefa adicional: ${describeApiError(error)}`);
             }
 
+            }
+
+            completedTasks.add(randomTask.taskId);
+            commentsPosted++;
+            consecutiveFailures = 0;
+
+            try {
+                await api.completeTask(randomTask.taskId, randomTask.requiredCommentId, authorSteamProfileId); // Mark additional comments as completed
+            } catch (error) {
+                log(`[${profile.username}] falha ao confirmar tarefa adicional: ${describeApiError(error)}`);
+            }
+
             try {
                 await db.updateLastComment(profile.steamId);
             } catch (error) {
@@ -495,6 +506,7 @@ async function authAllProfiles() {
                 log(res, true);
             }
         } catch (error) {
+            log(`[${profile.username}] Erro ao sincronizar: ${describeApiError(error)}`, true);
 
             log(`[${profile.username}] Erro ao sincronizar: ${describeApiError(error)}`, true);
 
@@ -628,12 +640,45 @@ async function addProfileSetup(accountName, password, sharedSecret) {
 }
 
 async function removeProfile(username) {
-    let res = await db.removeProfile(username);
-    if (res.changes == 0) {
-        log('profile not found', true);
-    } else {
-        log('profile removed', true);
+    const target = typeof username === 'string' ? username.trim() : '';
+
+    if (!target) {
+        log('Informe o usuário a remover.', true);
+        process.exit();
+        return;
     }
+
+    let profile;
+    try {
+        const profiles = await db.getAllProfiles();
+        profile = profiles.find(p => p.username === target);
+    } catch (error) {
+        log(`❌ Falha ao carregar perfis: ${error.message}`, true);
+        process.exit(1);
+        return;
+    }
+
+    if (!profile) {
+        log(`⚠️ Perfil '${target}' não encontrado.`, true);
+        process.exit();
+        return;
+    }
+
+    if (profile.steamId) {
+        await removeFromRep4Rep(profile.steamId);
+    }
+
+    try {
+        const result = await db.removeProfile(target);
+        if (!result || result.changes === 0) {
+            log(`⚠️ Nenhuma entrada removida para '${target}'.`, true);
+        }
+    } catch (error) {
+        log(`❌ Erro ao remover '${target}' do banco: ${error.message}`, true);
+    }
+
+    removeFromAccountsFile(target);
+    log(`✅ Remoção local concluída para '${target}'.`, true);
     process.exit();
 }
 
@@ -760,6 +805,7 @@ async function checkAndSyncProfiles() {
                 log(`[${profile.username}] Failed to sync: ${res}`);
             }
         } catch (error) {
+            log(`[${profile.username}] Erro ao sincronizar: ${describeApiError(error)}`);
 
             log(`[${profile.username}] Erro ao sincronizar: ${describeApiError(error)}`);
 
@@ -878,13 +924,37 @@ async function resetProfileCookies() {
     }
 }
 
+async function backupDatabase() {
+    try {
+        await db.init();
+    } catch (error) {
+        log(`❌ Falha ao preparar o banco para backup: ${error.message}`, true);
+        return null;
+    }
+
+    const src = db.getDatabasePath();
+    if (!fs.existsSync(src)) {
+        log('⚠️ Nenhum banco de dados encontrado para backup.', true);
+        return null;
+    }
+
 function backupDatabase() {
     const src = db.getDatabasePath();
     const destDir = path.join(__dirname, '..', 'backups');
+    if (!fs.existsSync(destDir)) {
+        fs.mkdirSync(destDir, { recursive: true });
+    }
+
     const timestamp = new Date().toISOString().replace(/:/g, '-');
-    if (!fs.existsSync(destDir)) fs.mkdirSync(destDir);
     const dest = path.join(destDir, `db-${timestamp}.sqlite`);
-    fs.copyFileSync(src, dest);
+
+    try {
+        fs.copyFileSync(src, dest);
+    } catch (error) {
+        log(`❌ Falha ao criar backup: ${error.message}`, true);
+        return null;
+    }
+
     log(`📦 Backup criado em: ${dest}`);
     return dest;
 }

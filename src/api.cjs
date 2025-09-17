@@ -125,11 +125,73 @@ class ApiWrapper {
         }
 
         await delay((attempt + 1) * 1000);
+
       }
     }
 
     throw lastError;
   }
+
+  async request(path, {
+    method = "POST",
+    query = {},
+    form = {},
+    expectsArray = false,
+    listKeys = [],
+  } = {}) {
+    const attempts = method.toUpperCase() === "GET" ? [false, true] : [false];
+    let lastError = null;
+
+    for (const includeTokenInQuery of attempts) {
+      const url = new URL(path, this.url);
+      const headers = {
+        Accept: "application/json",
+      };
+
+      if (this.token) {
+        headers.Authorization = `Bearer ${this.token}`;
+      }
+
+      const options = {
+        method,
+        headers,
+      };
+
+      if (method.toUpperCase() === "GET") {
+        const params = new URLSearchParams(query);
+        if (includeTokenInQuery || !headers.Authorization) {
+          params.set("apiToken", this.token);
+        }
+        const search = params.toString();
+        if (search) {
+          url.search = search;
+        }
+      } else {
+        options.body = this.buildForm(form);
+      }
+
+      try {
+        const payload = await this.fetchWithJsonCheck(url.toString(), options);
+        if (!expectsArray) {
+          return payload;
+        }
+        return this.extractList(payload, listKeys);
+      } catch (error) {
+        lastError = error;
+        if (
+          method.toUpperCase() === "GET" &&
+          !includeTokenInQuery &&
+          error instanceof ApiError &&
+          [401, 403].includes(error.status)
+        ) {
+          continue;
+        }
+
+        throw error;
+      }
+    }
+
+    throw lastError;
 
   async request(path, {
     method = "POST",
@@ -210,7 +272,7 @@ class ApiWrapper {
   async removeSteamProfile(steamId) {
     return await this.fetchWithJsonCheck(`${this.url}/user/steamprofiles/remove`, {
       method: "POST",
-      body: this.buildForm({ steamProfile: steamId }),
+      form: { steamProfile: steamId },
     });
   }
 
