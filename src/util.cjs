@@ -1240,6 +1240,28 @@ async function prioritizedAutoRun(options = {}) {
       return usedCredits < creditLimit;
     };
 
+    let usedCredits = 0;
+    const upstreamTaskHandler = baseRunOptions.onTaskComplete;
+    const onTaskComplete = async (payload) => {
+      if (typeof upstreamTaskHandler === 'function') {
+        try {
+          const upstreamResult = await upstreamTaskHandler(payload);
+          if (upstreamResult === false) {
+            return false;
+          }
+        } catch (callbackError) {
+          log(`⚠️ onTaskComplete custom handler falhou: ${callbackError.message}`);
+        }
+      }
+
+      if (isAdmin) {
+        return true;
+      }
+
+      usedCredits += 1;
+      return usedCredits < creditLimit;
+    };
+
     log(
       `🧾 Processando pedido da fila (${clientLabel}) (máx ${jobAccountLimit} contas / ${jobMaxComments} comentários).`,
     );
@@ -1265,6 +1287,7 @@ async function prioritizedAutoRun(options = {}) {
           }
         } catch (creditError) {
           log(`⚠️ Falha ao debitar créditos de ${clientLabel}: ${creditError.message}`);
+          log(`⚠️ Falha ao debitar créditos de ${client.username || client.id}: ${creditError.message}`);
         }
       }
 
@@ -1318,6 +1341,7 @@ async function prioritizedAutoRun(options = {}) {
 
       if (totalComments > 0) {
         log(`✅ Execução concluída para ${clientLabel}.`);
+        log(`✅ Execução concluída para ${client.username || client.id}.`);
       } else {
         log(`ℹ️ Nenhum comentário pendente para ${clientLabel}.`);
       }
