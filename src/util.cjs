@@ -54,6 +54,7 @@ function getEnvRep4RepKey() {
 }
 
 function resolveApiToken(token, { fallbackToEnv = true } = {}) {
+  if (token === false) {
   if (token === '' || token === false) {
     return null;
   }
@@ -1356,6 +1357,9 @@ async function prioritizedAutoRun(options = {}) {
       );
     }
 
+    const clientToken = resolveApiToken(client.rep4repKey, {
+      fallbackToEnv: client.role === 'admin',
+    });
     const clientToken = resolveApiToken(client.rep4repKey, { fallbackToEnv: false });
     if (!clientToken) {
       return failQueuedJob(
