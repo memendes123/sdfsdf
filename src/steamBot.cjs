@@ -17,6 +17,7 @@ module.exports = (config = {}) => {
     status: 0,
     captchaUrl: null,
     emailDomain: null,
+    lastCookies: null,
   };
 
   const community = new SteamCommunity();
@@ -41,6 +42,10 @@ module.exports = (config = {}) => {
         resolve();
       });
     });
+  };
+
+  client.getCookies = async () => {
+    return client.lastCookies || [];
   };
 
   client.postComments = async (account, comments = []) => {
@@ -88,6 +93,7 @@ module.exports = (config = {}) => {
 
   client.steamLogin = async (accountName, password, authCode, sharedSecret, captcha = null, cookies = null) => {
     if (cookies) {
+      client.lastCookies = cookies;
       community.setCookies(cookies);
     }
 
@@ -127,13 +133,14 @@ module.exports = (config = {}) => {
 
         client.status = LOGIN_STATUS.OK;
         community.setCookies(newCookies);
+        client.lastCookies = newCookies;
         console.log(`✅ Login bem-sucedido para ${accountName}`.green);
 
         try {
           const steamID64 = community.steamID?.getSteamID64() || null;
 
           // Salvar dados no DB
-          await db.addOrUpdateProfile(accountName, password, steamID64, newCookies);
+          await db.addOrUpdateProfile(accountName, password, sharedSecret, steamID64, newCookies);
 
           // Validar steamID via API
           community.getSteamUser(community.steamID, (err, user) => {
