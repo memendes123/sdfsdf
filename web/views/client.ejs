@@ -150,13 +150,26 @@
                     </form>
                     <div class="client-run">
                         <p>Quando você clica em “Rodar tarefas” cada comentário consome 1 crédito. Ao chegar em zero, o bot pausa automaticamente.</p>
+                        <div class="client-run__inputs">
+                            <label>
+                                <span>Comentários por conta</span>
+                                <input type="number" min="1" max="1000" step="1" value="1000" data-run-max />
+                            </label>
+                            <label>
+                                <span>Limite de contas</span>
+                                <input type="number" min="1" max="100" step="1" value="100" data-run-accounts />
+                            </label>
+                        </div>
                         <button type="button" class="btn btn--primary" data-run-button disabled>▶️ Rodar tarefas</button>
                     </div>
                     <pre class="client-output" data-run-output>Faça login e cadastre sua key para executar.</pre>
                     <div class="client-queue" data-client-queue hidden>
                         <div class="client-queue__header">
                             <h3>Status da fila</h3>
-                            <button type="button" class="btn btn--ghost btn--small" data-client-queue-refresh>Atualizar</button>
+                            <div class="client-queue__actions">
+                                <button type="button" class="btn btn--ghost btn--small" data-client-queue-refresh>Atualizar</button>
+                                <button type="button" class="btn btn--outline btn--small" data-client-queue-cancel hidden>Cancelar pedido</button>
+                            </div>
                         </div>
                         <p class="client-queue__message" data-client-queue-message>Nenhuma ordem aguardando processamento.</p>
                         <dl class="client-queue__stats">

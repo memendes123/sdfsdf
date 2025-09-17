@@ -5,6 +5,8 @@
   const dashboardSection = document.querySelector('[data-dashboard]');
   const runButton = document.querySelector('[data-run-button]');
   const runOutput = document.querySelector('[data-run-output]');
+  const runMaxInput = document.querySelector('[data-run-max]');
+  const runAccountsInput = document.querySelector('[data-run-accounts]');
   const keyForm = document.querySelector('[data-key-form]');
   const statusBadge = document.querySelector('[data-client-status]');
   const creditsEl = document.querySelector('[data-client-credits]');
@@ -25,6 +27,7 @@
   const queueEstimateEl = document.querySelector('[data-client-queue-estimate]');
   const queueTotalEl = document.querySelector('[data-client-queue-total]');
   const queueRefreshButton = document.querySelector('[data-client-queue-refresh]');
+  const queueCancelButton = document.querySelector('[data-client-queue-cancel]');
 
   const storageKeys = {
     userId: 'rep4repUserId',
@@ -208,6 +211,41 @@
     }
   }
 
+  function sanitizeLimit(value, fallback, max) {
+    const num = Number(value);
+    if (!Number.isFinite(num) || num <= 0) {
+      return fallback;
+    }
+    return Math.max(1, Math.min(max, Math.floor(num)));
+  }
+
+  function getRunPayload() {
+    const payload = { command: 'autoRun' };
+    const maxValue = runMaxInput ? sanitizeLimit(runMaxInput.value, 1000, 1000) : 1000;
+    const accountValue = runAccountsInput ? sanitizeLimit(runAccountsInput.value, 100, 100) : 100;
+
+    if (maxValue) {
+      payload.maxCommentsPerAccount = maxValue;
+    }
+    if (accountValue) {
+      payload.accountLimit = accountValue;
+    }
+
+    return payload;
+  }
+
+  function applyRunSettings(applied) {
+    if (!applied) {
+      return;
+    }
+    if (runMaxInput && applied.maxCommentsPerAccount != null) {
+      runMaxInput.value = applied.maxCommentsPerAccount;
+    }
+    if (runAccountsInput && applied.accountLimit != null) {
+      runAccountsInput.value = applied.accountLimit;
+    }
+  }
+
   function formatQueueWait(ms) {
     const value = Number(ms);
     if (!Number.isFinite(value) || value <= 0) {
@@ -256,12 +294,29 @@
         const total = Number(queue.queueLength);
         queueTotalEl.textContent = Number.isFinite(total) ? total : '--';
       }
+      if (queueCancelButton) {
+        const pendingJob = queue.job && queue.job.status === 'pending' && queue.job.id ? queue.job : null;
+        if (pendingJob) {
+          queueCancelButton.hidden = false;
+          queueCancelButton.disabled = false;
+          queueCancelButton.dataset.jobId = pendingJob.id;
+        } else {
+          queueCancelButton.hidden = true;
+          queueCancelButton.disabled = true;
+          delete queueCancelButton.dataset.jobId;
+        }
+      }
     } else {
       state.queue = null;
       if (queueMessageEl) {
         queueMessageEl.textContent = 'Nenhuma ordem aguardando processamento.';
       }
       queueCard.hidden = true;
+      if (queueCancelButton) {
+        queueCancelButton.hidden = true;
+        queueCancelButton.disabled = false;
+        delete queueCancelButton.dataset.jobId;
+      }
     }
 
     refreshRunButton();
@@ -401,7 +456,7 @@
         const data = await apiFetch('/api/user/run', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ command: 'autoRun' }),
+          body: JSON.stringify(getRunPayload()),
         });
         if (data?.queue) {
           const lines = [
@@ -419,11 +474,28 @@
           if (Number.isFinite(total)) {
             lines.push(`Pedidos na fila: ${total}`);
           }
+          if (data?.overrides?.applied) {
+            const applied = data.overrides.applied;
+            lines.push(
+              `Limites aplicados: ${applied.maxCommentsPerAccount} comentário(s) · ${applied.accountLimit} conta(s)`,
+            );
+          }
           runOutput.textContent = lines.join('\n');
           renderQueueStatus(data.queue);
         } else {
           runOutput.textContent = data.message || 'Pedido registrado.';
           renderQueueStatus(null);
+        }
+        if (!data?.queue && data?.overrides?.applied) {
+          const applied = data.overrides.applied;
+          const lines = [
+            data.message || 'Pedido registrado.',
+            `Limites aplicados: ${applied.maxCommentsPerAccount} comentário(s) · ${applied.accountLimit} conta(s)`,
+          ];
+          runOutput.textContent = lines.join('\n');
+        }
+        if (data?.overrides?.applied) {
+          applyRunSettings(data.overrides.applied);
         }
         showToast(data.message || 'Pedido enviado.');
       } catch (error) {
@@ -440,6 +512,41 @@
   if (queueRefreshButton) {
     queueRefreshButton.addEventListener('click', () => {
       loadQueueStatus();
+    });
+  }
+
+  if (queueCancelButton) {
+    queueCancelButton.addEventListener('click', async () => {
+      const jobId = queueCancelButton.dataset.jobId;
+      if (!jobId) {
+        showToast('Nenhum pedido pendente para remover.', 'error');
+        return;
+      }
+
+      const confirmed = window.confirm('Deseja cancelar seu pedido na fila?');
+      if (!confirmed) {
+        return;
+      }
+
+      try {
+        queueCancelButton.disabled = true;
+        const data = await apiFetch('/api/user/queue/cancel', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jobId }),
+        });
+        if (data?.queue) {
+          renderQueueStatus(data.queue);
+        } else {
+          renderQueueStatus(null);
+        }
+        showToast(data.message || 'Pedido removido da fila.');
+      } catch (error) {
+        showToast(error.message || 'Não foi possível cancelar o pedido.', 'error');
+        loadQueueStatus();
+      } finally {
+        queueCancelButton.disabled = false;
+      }
     });
   }
 

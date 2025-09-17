@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 
 const userStore = require('../services/userStore');
-const { collectUsageStats, describeApiError, queueAutomaticBackup } = require('../../src/util.cjs');
+const { collectUsageStats, describeApiError, queueAutomaticBackup, announceQueueEvent } = require('../../src/util.cjs');
 const rep4repApi = require('../../src/api.cjs');
 const runQueue = require('../../src/runQueue.cjs');
 
@@ -242,6 +242,57 @@ router.get('/queue', async (req, res) => {
   } catch (error) {
     console.error('[API usuário] Falha ao consultar fila:', error);
     res.status(500).json({ success: false, error: 'Não foi possível obter o status da fila.' });
+  }
+});
+
+router.post('/queue/cancel', async (req, res) => {
+  const { jobId } = req.body || {};
+  if (!jobId) {
+    return res.status(400).json({ success: false, error: 'Identificador do pedido obrigatório.' });
+  }
+
+  try {
+    const result = await runQueue.cancelJob(jobId, {
+      reason: 'Cancelado pelo cliente',
+      expectedUserId: req.user.id,
+    });
+
+    if (!result.cancelled) {
+      return res.status(409).json({
+        success: false,
+        error: 'Seu pedido já foi processado ou não está mais pendente.',
+        job: result.job,
+      });
+    }
+
+    try {
+      await announceQueueEvent({
+        type: 'job.cancelled',
+        job: result.job,
+        reason: 'Cancelado pelo cliente',
+        cancelledBy: req.user?.fullName || req.user?.username || req.user?.email || null,
+      });
+    } catch (notifyError) {
+      console.warn('[API usuário] Falha ao enviar webhook de cancelamento pelo cliente:', notifyError.message);
+    }
+
+    const queueStatus = await runQueue.getUserQueueStatus(req.user.id);
+    res.json({
+      success: true,
+      message: 'Pedido removido da fila.',
+      queue: queueStatus,
+    });
+  } catch (error) {
+    console.error('[API usuário] Falha ao cancelar pedido:', error);
+    const message = error?.message || 'Não foi possível cancelar o pedido.';
+    const status = /pertence a outro usuário/i.test(message)
+      ? 403
+      : /não encontrado/i.test(message)
+      ? 404
+      : /execu[cç][aã]o/i.test(message)
+      ? 409
+      : 400;
+    res.status(status).json({ success: false, error: message });
   }
 });
 
