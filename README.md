@@ -21,14 +21,15 @@ Automação de comentários no Steam via integração com o [Rep4Rep.com](https:
 ```
 📦 root
 ├── main.cjs               # Interface CLI
-├── util.cjs               # Funções principais do bot
-├── api.cjs                # Wrapper para API do Rep4Rep
-├── steamBot.cjs           # Lógica de login e comentários Steam
-├── db.cjs                 # Banco de dados SQLite
+├── src/
+│   ├── util.cjs           # Funções principais do bot
+│   ├── api.cjs            # Wrapper para API do Rep4Rep
+│   ├── steamBot.cjs       # Lógica de login e comentários Steam
+│   └── db.cjs             # Banco de dados SQLite
 ├── web/                   # Painel web em Express.js
 ├── accounts.txt           # Lista de contas Steam
 ├── .env                   # Configuração do bot
-├── db.sqlite              # Banco de dados de perfis
+├── steamprofiles.db       # Banco de dados de perfis
 └── logs/                  # Logs automáticos do bot
 ```
 
@@ -62,8 +63,9 @@ Automação de comentários no Steam via integração com o [Rep4Rep.com](https:
 
 **Recursos:**
 - Botões para iniciar tarefas via navegador
-- Visualização dos últimos logs
+- Visualização dos últimos logs (com fallback quando a pasta estiver vazia)
 - Autenticação com login e senha via `.env`
+- Retorno imediato dos comandos direto na interface (sem processos extras)
 
 ### ✅ Acesso:
 Abra no navegador: [http://localhost:3000](http://localhost:3000)
@@ -82,7 +84,7 @@ LOGIN_DELAY=30000
 # Tempo entre comentários (em ms)
 COMMENT_DELAY=15000
 
-# Login do painel web
+# Login do painel web (ou use PANEL_USER/PANEL_PASS para retrocompatibilidade)
 PANEL_USERNAME=admin
 PANEL_PASSWORD=senha123
 ```
