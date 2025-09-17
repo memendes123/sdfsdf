@@ -3,8 +3,10 @@ const path = require('path');
 const moment = require('moment');
 const { table } = require('table');
 const readline = require('readline');
+const dotenv = require('dotenv');
 
-require('dotenv').config();
+const ROOT_DIR = path.join(__dirname, '..');
+dotenv.config({ path: path.join(ROOT_DIR, '.env') });
 
 const db = require('./db.cjs');
 const api = require('./api.cjs');
@@ -13,8 +15,6 @@ const createSteamBot = require('./steamBot.cjs');
 const userStore = require('../web/services/userStore');
 const runQueue = require('./runQueue.cjs');
 
-
-const ROOT_DIR = path.join(__dirname, '..');
 const DATA_DIR = path.join(ROOT_DIR, 'data');
 const ACCOUNTS_PATH = path.join(ROOT_DIR, 'accounts.txt');
 const LOGS_DIR = path.join(ROOT_DIR, 'logs');
@@ -40,6 +40,38 @@ const BACKUP_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000;
 const DISCORD_WEBHOOK_URL = (process.env.DISCORD_WEBHOOK_URL || process.env.DISCORD_WEBHOOK || '').trim();
 const DISCORD_WEBHOOK_USERNAME = process.env.DISCORD_WEBHOOK_USERNAME || 'Rep4Rep Bot';
 const DISCORD_WEBHOOK_AVATAR_URL = (process.env.DISCORD_WEBHOOK_AVATAR_URL || '').trim();
+
+function normalizeApiToken(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function getEnvRep4RepKey() {
+  return normalizeApiToken(process.env.REP4REP_KEY) || '';
+}
+
+function resolveApiToken(token, { fallbackToEnv = true } = {}) {
+  if (token === false) {
+    return null;
+  }
+  const direct = normalizeApiToken(token);
+  if (direct) {
+    return direct;
+  }
+  if (!fallbackToEnv) {
+    return null;
+  }
+  const envToken = normalizeApiToken(process.env.REP4REP_KEY);
+  return envToken || null;
+}
+
+const normalizedEnvToken = normalizeApiToken(process.env.REP4REP_KEY);
+if (normalizedEnvToken) {
+  process.env.REP4REP_KEY = normalizedEnvToken;
+}
 
 let fetchModulePromise = null;
 
@@ -469,6 +501,18 @@ function queueAutomaticBackup({ reason = 'alteração' } = {}) {
   return scheduledBackupPromise;
 }
 
+const BACKUP_EVENT_TYPES = new Set(['profile.insert', 'profile.update', 'profile.remove']);
+if (typeof db.on === 'function') {
+  db.on('change', (event) => {
+    if (!event || !event.type || !BACKUP_EVENT_TYPES.has(event.type)) {
+      return;
+    }
+
+    const detail = event.username ? `${event.type}:${event.username}` : event.type;
+    queueAutomaticBackup({ reason: detail });
+  });
+}
+
 function removeFromAccountsFile(username) {
   if (!fs.existsSync(ACCOUNTS_PATH)) {
     return;
@@ -668,8 +712,14 @@ async function removeFromRep4Rep(steamId, options = {}) {
     return { removed: false };
   }
 
+  const token = resolveApiToken(options.apiToken);
+  if (!token) {
+    log('[Rep4Rep] Token da API não configurado. Defina REP4REP_KEY no .env.');
+    return { removed: false, error: new Error('Token Rep4Rep ausente.') };
+  }
+
   try {
-    await api.removeSteamProfile(steamId, { token: options.apiToken });
+    await api.removeSteamProfile(steamId, { token });
     log(`[Rep4Rep] Removido steamId: ${steamId}`);
     return { removed: true };
   } catch (error) {
@@ -699,10 +749,16 @@ async function removeRemoteProfiles(summary, options = {}) {
     return { attempted: 0, removed: 0 };
   }
 
+  const token = resolveApiToken(apiToken);
+  if (!token) {
+    log('[Rep4Rep] Token da API não configurado. Pulando remoção remota.');
+    return { attempted: steamIds.length, removed: 0, error: new Error('Token Rep4Rep ausente.') };
+  }
+
   let removed = 0;
   for (const steamId of steamIds) {
     try {
-      await apiClient.removeSteamProfile(steamId, { token: apiToken });
+      await apiClient.removeSteamProfile(steamId, { token });
       removed += 1;
     } catch (error) {
       log(`[Rep4Rep] Falha ao remover ${steamId} após execução: ${describeApiError(error)}`);
@@ -747,6 +803,12 @@ async function addProfilesFromFile(options = {}) {
     return { added: 0, total: 0 };
   }
 
+  const apiToken = resolveApiToken(options.apiToken);
+  if (!apiToken) {
+    log('⚠️ Token Rep4Rep não configurado. Defina REP4REP_KEY no .env para adicionar perfis.');
+    return { added: 0, total: selectedAccounts.length, error: new Error('Token Rep4Rep ausente.') };
+  }
+
   const existingProfiles = await db.getAllProfiles();
   const knownUsers = new Set(existingProfiles.map((profile) => profile.username));
 
@@ -788,7 +850,7 @@ async function addProfilesFromFile(options = {}) {
         log(`[${account.username}] SteamID não disponível após login.`);
       } else {
         try {
-          await api.addSteamProfile(steamId, { token: options.apiToken });
+          await api.addSteamProfile(steamId, { token: apiToken });
         } catch (error) {
           if (!(error instanceof ApiError && error.status === 409)) {
             throw error;
@@ -821,7 +883,7 @@ async function runFullCycle(options = {}) {
     Math.max(1, options.maxCommentsPerAccount ?? MAX_COMMENTS_PER_RUN),
   );
   const apiClient = options.apiClient || api;
-  const apiToken = options.apiToken ?? null;
+  const apiToken = resolveApiToken(options.apiToken);
 
   log(
     `Iniciando fluxo completo com até ${maxAccounts} contas e ${maxComments} comentários por conta.`,
@@ -960,6 +1022,12 @@ async function autoRun(options = {}) {
     onFinish,
   } = options;
 
+  const token = resolveApiToken(apiToken);
+  if (!token) {
+    log('⚠️ Token Rep4Rep não configurado. Configure REP4REP_KEY para executar o autoRun.', true);
+    return { totalComments: 0, perAccount: [] };
+  }
+
   const accounts = readAccountsFile();
   if (!accounts.length) {
     log('Nenhuma conta configurada no accounts.txt. Adicione contas antes de executar o autoRun.', true);
@@ -983,7 +1051,7 @@ async function autoRun(options = {}) {
 
   let remoteProfiles;
   try {
-    remoteProfiles = await apiClient.getSteamProfiles({ token: apiToken });
+    remoteProfiles = await apiClient.getSteamProfiles({ token });
   } catch (error) {
     log(`[API] Não foi possível obter os perfis do Rep4Rep: ${describeApiError(error)}`, true);
     return { totalComments: 0, perAccount: [] };
@@ -1031,8 +1099,8 @@ async function autoRun(options = {}) {
     if (!remoteProfile) {
       log(`[${account.username}] perfil não sincronizado com Rep4Rep. Tentando adicionar...`);
       try {
-        await apiClient.addSteamProfile(profile.steamId, { token: apiToken });
-        remoteProfiles = await apiClient.getSteamProfiles({ token: apiToken });
+        await apiClient.addSteamProfile(profile.steamId, { token });
+        remoteProfiles = await apiClient.getSteamProfiles({ token });
         remoteProfile = remoteProfiles.find((item) => String(item.steamId) === String(profile.steamId));
         if (remoteProfile) {
           remoteMap.set(String(profile.steamId), remoteProfile);
@@ -1085,7 +1153,7 @@ async function autoRun(options = {}) {
         client,
         remoteProfileId,
         apiClient,
-        apiToken,
+        apiToken: token,
         maxComments: Math.max(1, maxCommentsPerAccount),
         commentDelay,
         onTaskComplete,
@@ -1209,7 +1277,7 @@ async function failQueuedJob(job, client, reason, logMessage) {
 
 async function prioritizedAutoRun(options = {}) {
   const {
-    ownerToken = process.env.REP4REP_KEY ?? null,
+    ownerToken: ownerTokenOption = null,
     ownerWebhookUrl = null,
     ownerUser = null,
     maxCommentsPerAccount = MAX_COMMENTS_PER_RUN,
@@ -1218,6 +1286,8 @@ async function prioritizedAutoRun(options = {}) {
     onClientProcessed,
     ...runOverrides
   } = options;
+
+  const ownerToken = resolveApiToken(ownerTokenOption);
 
   const maxComments = Math.min(1000, Math.max(1, maxCommentsPerAccount));
   const baseRunOptions = {
@@ -1286,7 +1356,11 @@ async function prioritizedAutoRun(options = {}) {
       );
     }
 
-    if (!client.rep4repKey) {
+    const allowEnvFallback = client?.role && client.role !== 'customer';
+    const jobApiToken = resolveApiToken(client.rep4repKey, {
+      fallbackToEnv: Boolean(allowEnvFallback),
+    });
+    if (!jobApiToken) {
       return failQueuedJob(
         job,
         client,
@@ -1338,7 +1412,7 @@ async function prioritizedAutoRun(options = {}) {
     try {
       const summary = await autoRun({
         ...baseRunOptions,
-        apiToken: client.rep4repKey,
+        apiToken: jobApiToken,
         maxCommentsPerAccount: jobMaxComments,
         accountLimit: jobAccountLimit,
         onTaskComplete,
@@ -1367,7 +1441,7 @@ async function prioritizedAutoRun(options = {}) {
       }
 
       const cleanup = await removeRemoteProfiles(summary, {
-        apiToken: client.rep4repKey,
+        apiToken: jobApiToken,
         apiClient: baseRunOptions.apiClient || api,
       });
 
@@ -1487,13 +1561,17 @@ async function startKeepAliveLoop(options = {}) {
   keepAliveState.startedAt = new Date().toISOString();
   keepAliveState.lastError = null;
   keepAliveState.runs = 0;
-  keepAliveState.ownerToken = options.ownerToken || process.env.REP4REP_KEY || null;
+  keepAliveState.ownerToken = resolveApiToken(options.ownerToken ?? keepAliveState.ownerToken);
 
   const runOptions = {
     accountLimit: 100,
     maxCommentsPerAccount: MAX_COMMENTS_PER_RUN,
     ...options.runOptions,
   };
+
+  if (runOptions.ownerToken !== undefined) {
+    runOptions.ownerToken = resolveApiToken(runOptions.ownerToken);
+  }
 
   if (options.ownerWebhookUrl && !runOptions.ownerWebhookUrl) {
     runOptions.ownerWebhookUrl = options.ownerWebhookUrl;
@@ -1509,7 +1587,7 @@ async function startKeepAliveLoop(options = {}) {
       try {
         const summary = await prioritizedAutoRun({
           ...runOptions,
-          ownerToken: keepAliveState.ownerToken || runOptions.ownerToken,
+          ownerToken: resolveApiToken(keepAliveState.ownerToken ?? runOptions.ownerToken),
         });
         keepAliveState.lastRunAt = new Date().toISOString();
         keepAliveState.runs += 1;
@@ -1573,7 +1651,7 @@ function getKeepAliveStatus() {
     lastRunAt: keepAliveState.lastRunAt,
     runs: keepAliveState.runs,
     lastError: keepAliveState.lastError,
-    ownerTokenDefined: Boolean(keepAliveState.ownerToken),
+    ownerTokenDefined: Boolean(resolveApiToken(keepAliveState.ownerToken)),
     ownerWebhookDefined: Boolean(keepAliveState.ownerWebhookUrl),
   };
 }
@@ -1614,9 +1692,15 @@ async function checkAndSyncProfiles(options = {}) {
     return;
   }
 
+  const token = resolveApiToken(apiToken);
+  if (!token) {
+    log('⚠️ Token Rep4Rep não configurado. Configure REP4REP_KEY antes de sincronizar perfis.');
+    return;
+  }
+
   let remoteProfiles;
   try {
-    remoteProfiles = await apiClient.getSteamProfiles({ token: apiToken });
+    remoteProfiles = await apiClient.getSteamProfiles({ token });
   } catch (error) {
     log(`[API] Falha ao obter perfis: ${describeApiError(error)}`);
     return;
@@ -1628,7 +1712,7 @@ async function checkAndSyncProfiles(options = {}) {
     if (!remoteMap.has(String(profile.steamId))) {
       log(`[${profile.username}] não encontrado no Rep4Rep. Tentando sincronizar.`);
       try {
-        await apiClient.addSteamProfile(profile.steamId, { token: apiToken });
+        await apiClient.addSteamProfile(profile.steamId, { token });
         log(`[${profile.username}] sincronizado com sucesso.`);
       } catch (error) {
         log(`[${profile.username}] Falha ao sincronizar: ${describeApiError(error)}`);
@@ -1879,7 +1963,18 @@ async function backupDatabase() {
   const dest = path.join(BACKUPS_DIR, `db-${timestamp}.sqlite`);
 
   try {
-    fs.copyFileSync(src, dest);
+    await db.checkpoint('FULL');
+    try {
+      await db.vacuumInto(dest);
+    } catch (vacuumError) {
+      log(`⚠️ VACUUM INTO falhou (${vacuumError.message}). Tentando cópia direta...`);
+      try {
+        fs.rmSync(dest, { force: true });
+      } catch (rmError) {
+        // Ignora falhas ao remover arquivo parcialmente gerado
+      }
+      fs.copyFileSync(src, dest);
+    }
   } catch (error) {
     log(`❌ Falha ao criar backup: ${error.message}`, true);
     return null;
@@ -1928,4 +2023,6 @@ module.exports = {
   parseStoredCookies,
   closeReadline,
   announceQueueEvent,
+  getEnvRep4RepKey,
+  resolveApiToken,
 };

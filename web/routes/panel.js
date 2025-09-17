@@ -15,14 +15,17 @@ const {
   getKeepAliveStatus,
   describeApiError,
   announceQueueEvent,
+  getEnvRep4RepKey,
+  resolveApiToken,
 } = require('../../src/util.cjs');
 const runQueue = require('../../src/runQueue.cjs');
 
 const LOGS_DIR = path.join(__dirname, '..', '..', 'logs');
-const ENV_REP4REP_KEY = (process.env.REP4REP_KEY || '').trim();
+const ENV_REP4REP_KEY = getEnvRep4RepKey();
 
 function resolveOwnerCredentials(adminUser) {
-  const adminToken = adminUser?.rep4repKey ? adminUser.rep4repKey.trim() : '';
+  const adminToken =
+    resolveApiToken(adminUser?.rep4repKey, { fallbackToEnv: false }) || '';
   const token = adminToken || ENV_REP4REP_KEY || '';
   return {
     token,

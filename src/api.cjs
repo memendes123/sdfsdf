@@ -1,4 +1,9 @@
-require('dotenv').config();
+const path = require('path');
+const dotenv = require('dotenv');
+
+const ROOT_DIR = path.join(__dirname, '..');
+dotenv.config({ path: path.join(ROOT_DIR, '.env') });
+
 const { FormData } = require('formdata-node');
 
 const fetchFn = globalThis.fetch
@@ -14,12 +19,26 @@ class ApiError extends Error {
   }
 }
 
+function sanitizeToken(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function getEnvToken() {
+  return sanitizeToken(process.env.REP4REP_KEY);
+}
+
 class ApiWrapper {
   constructor({ token, baseUrl } = {}) {
     this.url = baseUrl || 'https://rep4rep.com/pub-api/';
-    this.token = token ?? process.env.REP4REP_KEY ?? null;
+    this.token = sanitizeToken(token) ?? getEnvToken();
     if (!this.token) {
-      console.warn('[Rep4Rep API] Token não configurado. Defina REP4REP_KEY ou forneça manualmente.');
+      console.warn(
+        '[Rep4Rep API] Token não configurado. Defina REP4REP_KEY ou forneça manualmente.',
+      );
     }
   }
 
@@ -28,15 +47,26 @@ class ApiWrapper {
   }
 
   setToken(token) {
-    this.token = token;
+    this.token = sanitizeToken(token);
   }
 
   resolveToken(override) {
-    const token = override ?? this.token;
-    if (!token) {
-      throw new ApiError('Token da API Rep4Rep não definido.');
+    const provided = sanitizeToken(override);
+    if (provided) {
+      return provided;
     }
-    return token;
+
+    const envToken = getEnvToken();
+    if (envToken) {
+      this.token = envToken;
+      return envToken;
+    }
+
+    if (this.token) {
+      return this.token;
+    }
+
+    throw new ApiError('Token da API Rep4Rep não definido.');
   }
 
   buildForm(params = {}, tokenOverride) {

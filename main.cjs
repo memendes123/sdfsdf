@@ -21,7 +21,8 @@ const {
     backupDatabase,
     scheduleAutomaticBackups,
     keepBotAliveInteractive,
-    closeReadline
+    closeReadline,
+    getEnvRep4RepKey
 } = require('./src/util.cjs');
 
 require('dotenv').config();
@@ -32,6 +33,24 @@ const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout
 });
+
+let cliTokenReadyLogged = false;
+function getCliApiToken(options = {}) {
+    const token = getEnvRep4RepKey();
+    if (token) {
+        if (!cliTokenReadyLogged) {
+            log("🔐 Usando token do .env para as operações do terminal.");
+            cliTokenReadyLogged = true;
+        }
+        return token;
+    }
+
+    if (options.required) {
+        log("⚠️ Defina REP4REP_KEY no arquivo .env para executar este comando pelo terminal.");
+    }
+
+    return null;
+}
 
 async function mainMenu() {
     log("Rep4Rep Bot CLI");
@@ -63,29 +82,40 @@ async function mainMenu() {
             case "2":
                 await authAllProfiles();
                 break;
-            case "3":
+            case "3": {
+                const token = getCliApiToken({ required: true });
+                if (!token) {
+                    break;
+                }
                 await prioritizedAutoRun({
                     accountLimit: 100,
                     maxCommentsPerAccount: 1000,
                     clientFilter: (user) => user.role !== 'admin',
+                    ownerToken: token
                 });
                 break;
-            case "4":
-                await addProfilesFromFile();
+            }
+            case "4": {
+                const token = getCliApiToken({ required: true });
+                if (!token) {
+                    break;
+                }
+                await addProfilesFromFile({ apiToken: token });
                 break;
-            case "5":
-                await addProfilesAndRun();
+            }
+            case "5": {
+                const token = getCliApiToken({ required: true });
+                if (!token) {
+                    break;
+                }
+                await addProfilesAndRun({ apiToken: token });
                 break;
-            case "15":
-                await runFullCycle({
-                    maxAccounts: 100,
-                    maxCommentsPerAccount: 1000,
-                });
-                break;
+            }
             case "6":
                 rl.question("Usuário a remover: ", async (username) => {
                     try {
-                        await removeProfile(username.trim());
+                        const token = getCliApiToken();
+                        await removeProfile(username.trim(), { apiToken: token });
                     } catch (error) {
                         if (!error?.logged) {
                             log(`❌ Falha ao remover perfil: ${error.message}`, true);
@@ -94,9 +124,14 @@ async function mainMenu() {
                     setTimeout(mainMenu, 1000);
                 });
                 return;
-            case "7":
-                await checkAndSyncProfiles();
+            case "7": {
+                const token = getCliApiToken({ required: true });
+                if (!token) {
+                    break;
+                }
+                await checkAndSyncProfiles({ apiToken: token });
                 break;
+            }
             case "8":
                 await checkCommentAvailability();
                 break;
@@ -118,10 +153,27 @@ async function mainMenu() {
             case "14":
                 await backupDatabase();
                 break;
-            case "16":
+            case "15": {
+                const token = getCliApiToken({ required: true });
+                if (!token) {
+                    break;
+                }
+                await runFullCycle({
+                    maxAccounts: 100,
+                    maxCommentsPerAccount: 1000,
+                    apiToken: token
+                });
+                break;
+            }
+            case "16": {
+                const token = getCliApiToken({ required: true });
+                if (!token) {
+                    break;
+                }
                 closeReadline();
-                await keepBotAliveInteractive();
+                await keepBotAliveInteractive({ ownerToken: token });
                 return;
+            }
             case "17":
                 await showQueueSnapshot();
                 break;
