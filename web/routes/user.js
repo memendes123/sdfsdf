@@ -213,6 +213,18 @@ router.post('/run', async (req, res) => {
         ? 'Você já possui uma execução aguardando processamento. Acompanhe sua posição na fila.'
         : 'Pedido adicionado à fila com sucesso. Aguarde a sua vez para começar.',
       queue: queueStatus,
+      effectiveMaxCommentsPerAccount: sanitizedMax,
+      effectiveAccountLimit: sanitizedAccounts,
+      overrides: {
+        requested: {
+          maxCommentsPerAccount: maxCommentsPerAccount ?? null,
+          accountLimit: accountLimit ?? null,
+        },
+        applied: {
+          maxCommentsPerAccount: sanitizedMax,
+          accountLimit: sanitizedAccounts,
+        },
+      },
     });
   } catch (error) {
     console.error('[API usuário] Falha ao enfileirar execução:', error);

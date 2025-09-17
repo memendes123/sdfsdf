@@ -31,9 +31,6 @@
   let cachedUsers = [];
   let cachedQueue = window.__INITIAL_QUEUE__ || null;
 
-  let toastTimeout = null;
-  let cachedUsers = [];
-
   function showToast(message, variant = 'success') {
     if (!toastEl) return;
     toastEl.textContent = message;
@@ -213,7 +210,7 @@
     if (jobs.length === 0) {
       const row = document.createElement('tr');
       const cell = document.createElement('td');
-      cell.colSpan = 5;
+      cell.colSpan = 7;
       cell.className = 'is-center is-muted';
       cell.textContent = 'Nenhum pedido aguardando processamento.';
       row.appendChild(cell);
@@ -221,6 +218,9 @@
     } else {
       jobs.forEach((job, index) => {
         const row = document.createElement('tr');
+        if (job.id) {
+          row.dataset.queueJobId = job.id;
+        }
 
         const positionCell = document.createElement('td');
         positionCell.textContent = job.position != null ? job.position : index + 1;
@@ -253,10 +253,34 @@
           : '—';
         row.appendChild(enqueueCell);
 
+        const limitCell = document.createElement('td');
+        const maxComments = Number(job.maxCommentsPerAccount);
+        const accountLimit = Number(job.accountLimit);
+        const maxText = Number.isFinite(maxComments) ? `${maxComments} c/conta` : '—';
+        const accountText = Number.isFinite(accountLimit) ? `${accountLimit} contas` : '—';
+        limitCell.textContent = `${maxText} · ${accountText}`;
+        row.appendChild(limitCell);
+
         const commentsCell = document.createElement('td');
         const comments = Number(job.totalComments);
         commentsCell.textContent = Number.isFinite(comments) && comments > 0 ? comments : '—';
         row.appendChild(commentsCell);
+
+        const actionsCell = document.createElement('td');
+        if (job.status === 'pending') {
+          const cancelButton = document.createElement('button');
+          cancelButton.type = 'button';
+          cancelButton.className = 'btn btn--ghost btn--pill';
+          cancelButton.dataset.queueCancel = job.id;
+          cancelButton.textContent = 'Cancelar';
+          actionsCell.appendChild(cancelButton);
+        } else {
+          const badge = document.createElement('span');
+          badge.className = 'badge badge--muted';
+          badge.textContent = 'Em execução';
+          actionsCell.appendChild(badge);
+        }
+        row.appendChild(actionsCell);
 
         queueBody.appendChild(row);
       });
@@ -380,6 +404,38 @@
     } catch (error) {
       console.error('[Painel] Falha ao atualizar fila:', error);
       showToast(error.message || 'Erro ao atualizar fila.', 'error');
+    }
+  }
+
+  async function cancelQueueJob(jobId, button) {
+    if (!jobId) {
+      return;
+    }
+
+    try {
+      if (button) {
+        button.disabled = true;
+      }
+      const res = await fetch(buildUrl(`/api/queue/${encodeURIComponent(jobId)}/cancel`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'Cancelado via painel' }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.success === false) {
+        throw new Error(data.error || 'Não foi possível cancelar o pedido.');
+      }
+      if (data.queue) {
+        cachedQueue = data.queue;
+        renderQueue(cachedQueue);
+      }
+      showToast(data.message || 'Pedido cancelado com sucesso.', 'success');
+    } catch (error) {
+      showToast(error.message || 'Erro ao cancelar pedido.', 'error');
+    } finally {
+      if (button) {
+        button.disabled = false;
+      }
     }
   }
 
@@ -507,6 +563,17 @@
   if (queueRefreshButton) {
     queueRefreshButton.addEventListener('click', () => {
       refreshQueue();
+    });
+  }
+
+  if (queueBody) {
+    queueBody.addEventListener('click', (event) => {
+      const cancelButton = event.target.closest('[data-queue-cancel]');
+      if (cancelButton) {
+        event.preventDefault();
+        const jobId = cancelButton.dataset.queueCancel;
+        cancelQueueJob(jobId, cancelButton);
+      }
     });
   }
 

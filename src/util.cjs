@@ -37,6 +37,23 @@ const KEEPALIVE_INTERVAL_MINUTES = Math.max(5, sanitizePositiveInteger(
 ));
 const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
 const BACKUP_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000;
+const DISCORD_WEBHOOK_URL = (process.env.DISCORD_WEBHOOK_URL || process.env.DISCORD_WEBHOOK || '').trim();
+const DISCORD_WEBHOOK_USERNAME = process.env.DISCORD_WEBHOOK_USERNAME || 'Rep4Rep Bot';
+const DISCORD_WEBHOOK_AVATAR_URL = (process.env.DISCORD_WEBHOOK_AVATAR_URL || '').trim();
+
+let fetchModulePromise = null;
+
+async function resolveFetch() {
+  if (typeof globalThis.fetch === 'function') {
+    return globalThis.fetch.bind(globalThis);
+  }
+
+  if (!fetchModulePromise) {
+    fetchModulePromise = import('node-fetch').then(({ default: fetch }) => fetch);
+  }
+
+  return fetchModulePromise;
+}
 
 let rl = null;
 
@@ -106,6 +123,160 @@ function logInvalidAccount(username, reason) {
   const timestamp = new Date().toLocaleTimeString();
   const line = `[${timestamp}] ${username} - ${reason}\n`;
   fs.appendFileSync(logFile, line);
+}
+
+async function sendDiscordWebhook(payload = {}) {
+  if (!DISCORD_WEBHOOK_URL) {
+    return false;
+  }
+
+  try {
+    const fetch = await resolveFetch();
+    const body = {
+      username: DISCORD_WEBHOOK_USERNAME,
+      ...(DISCORD_WEBHOOK_AVATAR_URL ? { avatar_url: DISCORD_WEBHOOK_AVATAR_URL } : {}),
+      ...payload,
+    };
+
+    const response = await fetch(DISCORD_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      let details = '';
+      try {
+        details = await response.text();
+      } catch (error) {
+        details = '';
+      }
+      const snippet = details ? details.slice(0, 140) : '';
+      log(
+        `⚠️ Webhook do Discord respondeu com status ${response.status}${
+          snippet ? ` – ${snippet}` : ''
+        }`,
+      );
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    log(`⚠️ Falha ao enviar webhook do Discord: ${error.message}`);
+    return false;
+  }
+}
+
+function formatClientLabel(client) {
+  if (!client) {
+    return 'Cliente';
+  }
+  return (
+    client.fullName ||
+    client.displayName ||
+    client.username ||
+    client.id ||
+    (typeof client === 'string' ? client : 'Cliente')
+  );
+}
+
+function buildLimitLabel(job) {
+  if (!job) {
+    return '--';
+  }
+  const maxComments = Number(job.maxCommentsPerAccount);
+  const accountLimit = Number(job.accountLimit);
+  const commentsText = Number.isFinite(maxComments) ? `${maxComments} comentários/conta` : '—';
+  const accountsText = Number.isFinite(accountLimit) ? `${accountLimit} contas` : '—';
+  return `${commentsText} · ${accountsText}`;
+}
+
+function summarizePerAccount(perAccount = []) {
+  if (!Array.isArray(perAccount) || perAccount.length === 0) {
+    return null;
+  }
+
+  const topEntries = perAccount.slice(0, 5).map((item) => {
+    const username = item?.username || item?.profile || 'conta';
+    const comments = Number(item?.comments) || 0;
+    const suffix = item?.stoppedEarly ? ' (limite atingido)' : '';
+    return `• ${username}: ${comments}${suffix}`;
+  });
+
+  if (perAccount.length > topEntries.length) {
+    topEntries.push(`• ... +${perAccount.length - topEntries.length} conta(s)`);
+  }
+
+  return topEntries.join('\n');
+}
+
+async function announceQueueEvent(event = {}) {
+  if (!DISCORD_WEBHOOK_URL) {
+    return false;
+  }
+
+  const job = event.job || null;
+  const client = event.client || job?.user || null;
+  const clientLabel = formatClientLabel(client);
+  const embed = {
+    timestamp: new Date().toISOString(),
+    fields: [],
+  };
+
+  if (job?.id) {
+    embed.footer = { text: `Job ${job.id}` };
+  }
+
+  switch (event.type) {
+    case 'job.completed': {
+      const totalComments = Number(event.summary?.totalComments ?? job?.totalComments ?? 0);
+      const credits = Number(event.creditsConsumed ?? job?.creditsConsumed ?? 0);
+      embed.title = `✅ Pedido concluído – ${clientLabel}`;
+      embed.description = `autoRun finalizado com ${totalComments} comentário(s).`;
+      embed.color = 0x2ecc71;
+      embed.fields.push({ name: 'Comentários enviados', value: String(totalComments), inline: true });
+      embed.fields.push({ name: 'Créditos debitados', value: String(Math.max(0, credits)), inline: true });
+      embed.fields.push({ name: 'Limites aplicados', value: buildLimitLabel(job), inline: false });
+      const perAccountSummary = summarizePerAccount(event.summary?.perAccount);
+      if (perAccountSummary) {
+        embed.fields.push({ name: 'Detalhes por conta', value: perAccountSummary, inline: false });
+      }
+      break;
+    }
+    case 'job.failed': {
+      embed.title = `❌ Pedido falhou – ${clientLabel}`;
+      embed.description = event.error || job?.error || 'Falha desconhecida.';
+      embed.color = 0xe74c3c;
+      embed.fields.push({ name: 'Limites aplicados', value: buildLimitLabel(job), inline: true });
+      break;
+    }
+    case 'job.cancelled': {
+      embed.title = `⏹️ Pedido cancelado – ${clientLabel}`;
+      const actor = event.cancelledBy ? ` por ${event.cancelledBy}` : '';
+      embed.description = `Pedido cancelado${actor}.`;
+      embed.color = 0x95a5a6;
+      embed.fields.push({ name: 'Limites aplicados', value: buildLimitLabel(job), inline: true });
+      if (event.reason) {
+        embed.fields.push({ name: 'Motivo', value: event.reason, inline: true });
+      }
+      break;
+    }
+    case 'owner.completed': {
+      const totalOwner = Number(event.summary?.totalComments ?? 0);
+      embed.title = '🚀 Execução prioritária concluída';
+      embed.description = `O lote do proprietário finalizou com ${totalOwner} comentário(s).`;
+      embed.color = 0x3498db;
+      const perAccountSummary = summarizePerAccount(event.summary?.perAccount);
+      if (perAccountSummary) {
+        embed.fields.push({ name: 'Detalhes por conta', value: perAccountSummary, inline: false });
+      }
+      break;
+    }
+    default:
+      return false;
+  }
+
+  return sendDiscordWebhook({ embeds: [embed] });
 }
 
 function readMaintenanceMetadata() {
@@ -934,6 +1105,7 @@ async function prioritizedAutoRun(options = {}) {
     try {
       const summary = await autoRun({ ...baseRunOptions, apiToken: ownerToken });
       result.owner = summary;
+      await announceQueueEvent({ type: 'owner.completed', summary });
       if (summary.totalComments > 0) {
         log('Pedidos do proprietário atendidos. Continuando com a fila de clientes.');
       }
@@ -961,34 +1133,85 @@ async function prioritizedAutoRun(options = {}) {
 
     const client = job.user || (await userStore.getUser(job.userId));
     if (!client) {
-      await runQueue.failJob(job.id, 'Usuário não encontrado.');
+      const failedJob = await runQueue.failJob(job.id, 'Usuário não encontrado.');
       log(`❌ Pedido ${job.id} removido da fila: usuário inexistente.`);
+      try {
+        await announceQueueEvent({
+          type: 'job.failed',
+          job: failedJob,
+          error: 'Usuário não encontrado.',
+        });
+      } catch (notifyError) {
+        log(`⚠️ Falha ao notificar erro via webhook: ${notifyError.message}`);
+      }
       continue;
     }
 
+    const clientLabel = formatClientLabel(client);
+
     if (typeof clientFilter === 'function' && !clientFilter(client)) {
-      await runQueue.failJob(job.id, 'Pedido bloqueado pelo filtro do operador.');
+      const failedJob = await runQueue.failJob(job.id, 'Pedido bloqueado pelo filtro do operador.');
       log(`⚠️ Pedido ${job.id} ignorado (filtro do operador).`);
+      try {
+        await announceQueueEvent({
+          type: 'job.failed',
+          job: failedJob,
+          client,
+          error: 'Pedido bloqueado pelo filtro do operador.',
+        });
+      } catch (notifyError) {
+        log(`⚠️ Falha ao notificar erro via webhook: ${notifyError.message}`);
+      }
       continue;
     }
 
     if (client.status !== 'active') {
-      await runQueue.failJob(job.id, 'Conta inativa ou bloqueada.');
-      log(`⚠️ ${client.username || client.id} ignorado: conta não está ativa.`);
+      const failedJob = await runQueue.failJob(job.id, 'Conta inativa ou bloqueada.');
+      log(`⚠️ ${clientLabel} ignorado: conta não está ativa.`);
+      try {
+        await announceQueueEvent({
+          type: 'job.failed',
+          job: failedJob,
+          client,
+          error: 'Conta inativa ou bloqueada.',
+        });
+      } catch (notifyError) {
+        log(`⚠️ Falha ao notificar erro via webhook: ${notifyError.message}`);
+      }
       continue;
     }
 
     if (!client.rep4repKey) {
-      await runQueue.failJob(job.id, 'Chave Rep4Rep não configurada.');
-      log(`⚠️ ${client.username || client.id} ignorado: key Rep4Rep ausente.`);
+      const failedJob = await runQueue.failJob(job.id, 'Chave Rep4Rep não configurada.');
+      log(`⚠️ ${clientLabel} ignorado: key Rep4Rep ausente.`);
+      try {
+        await announceQueueEvent({
+          type: 'job.failed',
+          job: failedJob,
+          client,
+          error: 'Chave Rep4Rep não configurada.',
+        });
+      } catch (notifyError) {
+        log(`⚠️ Falha ao notificar erro via webhook: ${notifyError.message}`);
+      }
       continue;
     }
 
     const isAdmin = client.role === 'admin';
     const creditLimit = isAdmin ? Infinity : Number(client.credits) || 0;
     if (!isAdmin && creditLimit <= 0) {
-      await runQueue.failJob(job.id, 'Créditos insuficientes.');
-      log(`⚠️ ${client.username || client.id} sem créditos suficientes. Pedido removido.`);
+      const failedJob = await runQueue.failJob(job.id, 'Créditos insuficientes.');
+      log(`⚠️ ${clientLabel} sem créditos suficientes. Pedido removido.`);
+      try {
+        await announceQueueEvent({
+          type: 'job.failed',
+          job: failedJob,
+          client,
+          error: 'Créditos insuficientes.',
+        });
+      } catch (notifyError) {
+        log(`⚠️ Falha ao notificar erro via webhook: ${notifyError.message}`);
+      }
       continue;
     }
 
@@ -1017,9 +1240,30 @@ async function prioritizedAutoRun(options = {}) {
       return usedCredits < creditLimit;
     };
 
+    let usedCredits = 0;
+    const upstreamTaskHandler = baseRunOptions.onTaskComplete;
+    const onTaskComplete = async (payload) => {
+      if (typeof upstreamTaskHandler === 'function') {
+        try {
+          const upstreamResult = await upstreamTaskHandler(payload);
+          if (upstreamResult === false) {
+            return false;
+          }
+        } catch (callbackError) {
+          log(`⚠️ onTaskComplete custom handler falhou: ${callbackError.message}`);
+        }
+      }
+
+      if (isAdmin) {
+        return true;
+      }
+
+      usedCredits += 1;
+      return usedCredits < creditLimit;
+    };
+
     log(
-      `🧾 Processando pedido da fila (${client.username || client.fullName || client.id}) ` +
-        `(máx ${jobAccountLimit} contas / ${jobMaxComments} comentários).`,
+      `🧾 Processando pedido da fila (${clientLabel}) (máx ${jobAccountLimit} contas / ${jobMaxComments} comentários).`,
     );
 
     try {
@@ -1034,12 +1278,22 @@ async function prioritizedAutoRun(options = {}) {
       const totalComments = summary?.totalComments ?? 0;
       const consumed = isAdmin ? 0 : Math.min(creditLimit, usedCredits, totalComments);
 
+      let updatedUser = null;
       if (!isAdmin && consumed > 0) {
         try {
-          await userStore.consumeCredits(client.id, consumed);
+          updatedUser = await userStore.consumeCredits(client.id, consumed);
+          if (updatedUser?.credits != null) {
+            client.credits = updatedUser.credits;
+          }
         } catch (creditError) {
+          log(`⚠️ Falha ao debitar créditos de ${clientLabel}: ${creditError.message}`);
           log(`⚠️ Falha ao debitar créditos de ${client.username || client.id}: ${creditError.message}`);
         }
+      }
+
+      if (!isAdmin) {
+        const remaining = updatedUser?.credits ?? (Number.isFinite(creditLimit) ? Math.max(0, creditLimit - consumed) : 0);
+        log(`[${clientLabel}] Créditos debitados: ${consumed}. Restantes: ${remaining}.`);
       }
 
       const cleanup = await removeRemoteProfiles(summary, {
@@ -1047,7 +1301,7 @@ async function prioritizedAutoRun(options = {}) {
         apiClient: baseRunOptions.apiClient || api,
       });
 
-      await runQueue.completeJob(job.id, {
+      const completedJob = await runQueue.completeJob(job.id, {
         summary,
         cleanup,
         creditsConsumed: consumed,
@@ -1059,10 +1313,23 @@ async function prioritizedAutoRun(options = {}) {
         summary,
         creditsConsumed: consumed,
         cleanup,
-        queueJob: { id: job.id },
+        queueJob: completedJob,
+        status: 'completed',
       };
       result.clients.push(clientResult);
       processedJobs += 1;
+
+      try {
+        await announceQueueEvent({
+          type: 'job.completed',
+          job: completedJob,
+          client,
+          summary,
+          creditsConsumed: consumed,
+        });
+      } catch (notifyError) {
+        log(`⚠️ Falha ao notificar conclusão via webhook: ${notifyError.message}`);
+      }
 
       if (typeof onClientProcessed === 'function') {
         try {
@@ -1073,14 +1340,20 @@ async function prioritizedAutoRun(options = {}) {
       }
 
       if (totalComments > 0) {
+        log(`✅ Execução concluída para ${clientLabel}.`);
         log(`✅ Execução concluída para ${client.username || client.id}.`);
       } else {
-        log(`ℹ️ Nenhum comentário pendente para ${client.username || client.id}.`);
+        log(`ℹ️ Nenhum comentário pendente para ${clientLabel}.`);
       }
     } catch (error) {
-      await runQueue.failJob(job.id, error.message);
-      log(`❌ Falha ao processar ${client.username || client.id}: ${error.message}`);
-      result.clients.push({ client, error: error.message, queueJob: { id: job.id } });
+      const failedJob = await runQueue.failJob(job.id, error.message);
+      log(`❌ Falha ao processar ${clientLabel}: ${error.message}`);
+      result.clients.push({ client, error: error.message, queueJob: failedJob, status: 'failed' });
+      try {
+        await announceQueueEvent({ type: 'job.failed', job: failedJob, client, error: error.message });
+      } catch (notifyError) {
+        log(`⚠️ Falha ao notificar erro via webhook: ${notifyError.message}`);
+      }
     }
   }
 
@@ -1415,6 +1688,57 @@ async function usageStats() {
   log(`Total de comentários nas últimas 24h: ${stats.commentsLast24h}`);
 }
 
+async function showQueueSnapshot() {
+  log('📬 Status da fila de execuções:');
+  try {
+    const snapshot = await runQueue.getQueueSnapshot();
+    const jobs = Array.isArray(snapshot?.jobs) ? snapshot.jobs : [];
+    log(`Pedidos pendentes: ${jobs.length}`);
+
+    if (jobs.length) {
+      const rows = [
+        ['Posição', 'Cliente', 'Status', 'Enfileirado', 'Limites', 'Comentários'],
+      ];
+
+      for (const job of jobs) {
+        rows.push([
+          job.position != null ? String(job.position) : '—',
+          formatClientLabel(job.user),
+          job.status || 'pending',
+          job.enqueuedAt ? new Date(job.enqueuedAt).toLocaleString() : '—',
+          buildLimitLabel(job),
+          String(job.totalComments ?? 0),
+        ]);
+      }
+
+      console.log(table(rows));
+    } else {
+      log('Nenhum pedido aguardando processamento.');
+    }
+
+    const averageMs = Number(snapshot?.averageDurationMs) || 0;
+    if (averageMs > 0) {
+      const minutes = Math.round(averageMs / 60000);
+      log(`⏱️ Duração média estimada dos últimos ciclos: ${minutes} minuto(s).`);
+    }
+
+    const history = Array.isArray(snapshot?.history) ? snapshot.history : [];
+    if (history.length) {
+      log('🕑 Histórico recente:');
+      history.forEach((item) => {
+        const finishedAt = item.finishedAt ? new Date(item.finishedAt).toLocaleString() : '—';
+        const status = item.status || 'desconhecido';
+        log(`- ${formatClientLabel(item.user)} · ${status} · ${finishedAt}`);
+      });
+    }
+
+    return snapshot;
+  } catch (error) {
+    log(`❌ Falha ao obter fila: ${error.message}`);
+    return null;
+  }
+}
+
 async function resetProfileCookies(options = {}) {
   const profiles = await db.getAllProfiles();
   for (const profile of profiles) {
@@ -1492,6 +1816,7 @@ module.exports = {
   exportProfilesToCSV,
   clearInvalidAccounts,
   usageStats,
+  showQueueSnapshot,
   collectUsageStats,
   resetProfileCookies,
   backupDatabase,
@@ -1504,4 +1829,5 @@ module.exports = {
   readAccountsFile,
   parseStoredCookies,
   closeReadline,
+  announceQueueEvent,
 };
