@@ -172,6 +172,7 @@ router.post('/api/run', async (req, res) => {
       const {
         maxCommentsPerAccount: requestedMax,
         accountLimit: requestedAccounts,
+        totalComments: requestedTotal,
         apiToken: providedToken,
       } = req.body || {};
 
@@ -186,6 +187,8 @@ router.post('/api/run', async (req, res) => {
 
       const sanitizedMax = sanitizeAdminLimit(requestedMax, 1000, 1000);
       const sanitizedAccounts = sanitizeAdminLimit(requestedAccounts, 100, 100);
+      const sanitizedTotal = sanitizeAdminLimit(requestedTotal, 0, 1000);
+      const effectiveTotal = sanitizedTotal > 0 ? sanitizedTotal : null;
 
       const currentStatus = getQueueRunnerStatus();
       if (currentStatus.running) {
@@ -195,6 +198,7 @@ router.post('/api/run', async (req, res) => {
           applied: {
             maxCommentsPerAccount: sanitizedMax,
             accountLimit: sanitizedAccounts,
+            requestedComments: effectiveTotal,
             apiTokenProvided: Boolean(explicitToken),
           },
         };
@@ -205,6 +209,7 @@ router.post('/api/run', async (req, res) => {
         options: {
           maxCommentsPerAccount: sanitizedMax,
           accountLimit: sanitizedAccounts,
+          requestedComments: effectiveTotal,
           apiTokenProvided: Boolean(explicitToken),
         },
       });
@@ -216,6 +221,7 @@ router.post('/api/run', async (req, res) => {
           ownerUser: user,
           accountLimit: sanitizedAccounts,
           maxCommentsPerAccount: sanitizedMax,
+          targetTotalComments: effectiveTotal,
           clientFilter: (user) => user.role !== 'admin',
           shouldAbort: isQueueRunnerStopRequested,
           onQueueStart: () => markQueueRunnerProgress({ message: 'Processando fila de clientes...' }),
@@ -243,6 +249,7 @@ router.post('/api/run', async (req, res) => {
           applied: {
             maxCommentsPerAccount: sanitizedMax,
             accountLimit: sanitizedAccounts,
+            requestedComments: effectiveTotal,
             apiTokenProvided: Boolean(explicitToken),
           },
         };

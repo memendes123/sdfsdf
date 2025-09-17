@@ -34,6 +34,7 @@
   const autoRunMaxInput = document.querySelector('[data-auto-run-max]');
   const autoRunAccountsInput = document.querySelector('[data-auto-run-accounts]');
   const autoRunKeyInput = document.querySelector('[data-auto-run-key]');
+  const autoRunTotalInput = document.querySelector('[data-auto-run-total]');
   const autoRunStartButtons = document.querySelectorAll('[data-command="autoRun"]');
   const autoRunStopButtons = document.querySelectorAll('[data-command="autoRunStop"]');
 
@@ -73,6 +74,7 @@
 
   function getAutoRunPayload() {
     const payload = {};
+    const totalValue = autoRunTotalInput ? sanitizeLimit(autoRunTotalInput.value, 0, 1000) : 0;
     const maxValue = autoRunMaxInput
       ? sanitizeLimit(autoRunMaxInput.value, 1000, 1000)
       : 1000;
@@ -80,6 +82,9 @@
       ? sanitizeLimit(autoRunAccountsInput.value, 100, 100)
       : 100;
 
+    if (totalValue > 0) {
+      payload.totalComments = totalValue;
+    }
     if (maxValue) {
       payload.maxCommentsPerAccount = maxValue;
     }
@@ -100,6 +105,13 @@
   function applyAutoRunSettings(applied) {
     if (!applied) {
       return;
+    }
+    if (autoRunTotalInput) {
+      if (applied.requestedComments != null) {
+        autoRunTotalInput.value = applied.requestedComments;
+      } else {
+        autoRunTotalInput.value = '';
+      }
     }
     if (autoRunMaxInput && applied.maxCommentsPerAccount != null) {
       autoRunMaxInput.value = applied.maxCommentsPerAccount;
@@ -144,6 +156,13 @@
     });
 
     if (status?.options) {
+      if (autoRunTotalInput) {
+        if (status.options.requestedComments != null) {
+          autoRunTotalInput.value = status.options.requestedComments;
+        } else {
+          autoRunTotalInput.value = '';
+        }
+      }
       if (autoRunMaxInput && status.options.maxCommentsPerAccount != null) {
         autoRunMaxInput.value = status.options.maxCommentsPerAccount;
       }
@@ -395,9 +414,18 @@
         const limitCell = document.createElement('td');
         const maxComments = Number(job.maxCommentsPerAccount);
         const accountLimit = Number(job.accountLimit);
-        const maxText = Number.isFinite(maxComments) ? `${maxComments} c/conta` : '—';
-        const accountText = Number.isFinite(accountLimit) ? `${accountLimit} contas` : '—';
-        limitCell.textContent = `${maxText} · ${accountText}`;
+        const requested = Number(job.requestedComments);
+        const limitParts = [];
+        if (Number.isFinite(requested) && requested > 0) {
+          limitParts.push(`${requested} totais`);
+        }
+        if (Number.isFinite(maxComments) && maxComments > 0) {
+          limitParts.push(`${maxComments} c/conta`);
+        }
+        if (Number.isFinite(accountLimit) && accountLimit > 0) {
+          limitParts.push(`${accountLimit} conta(s)`);
+        }
+        limitCell.textContent = limitParts.length ? limitParts.join(' · ') : '—';
         row.appendChild(limitCell);
 
         const commentsCell = document.createElement('td');

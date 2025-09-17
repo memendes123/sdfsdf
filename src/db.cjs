@@ -201,6 +201,7 @@ class DbWrapper extends EventEmitter {
         status TEXT NOT NULL DEFAULT 'pending',
         maxCommentsPerAccount INTEGER NOT NULL DEFAULT 1000,
         accountLimit INTEGER NOT NULL DEFAULT 100,
+        requestedComments INTEGER NOT NULL DEFAULT 0,
         enqueuedAt TEXT NOT NULL,
         startedAt TEXT,
         finishedAt TEXT,
@@ -223,6 +224,12 @@ class DbWrapper extends EventEmitter {
       CREATE INDEX IF NOT EXISTS idx_run_queue_user
       ON run_queue(userId, status)
     `);
+
+    const queueColumns = await this.db.all(`PRAGMA table_info(run_queue)`);
+    const hasRequestedComments = queueColumns.some((column) => column.name === 'requestedComments');
+    if (!hasRequestedComments) {
+      await this.db.exec(`ALTER TABLE run_queue ADD COLUMN requestedComments INTEGER NOT NULL DEFAULT 0`);
+    }
   }
 
   async addOrUpdateProfile(username, password, sharedSecret, steamId, cookies) {

@@ -5,6 +5,7 @@
   const dashboardSection = document.querySelector('[data-dashboard]');
   const runButton = document.querySelector('[data-run-button]');
   const runOutput = document.querySelector('[data-run-output]');
+  const runTotalInput = document.querySelector('[data-run-total]');
   const runMaxInput = document.querySelector('[data-run-max]');
   const runAccountsInput = document.querySelector('[data-run-accounts]');
   const keyForm = document.querySelector('[data-key-form]');
@@ -26,6 +27,7 @@
   const queueAheadEl = document.querySelector('[data-client-queue-ahead]');
   const queueEstimateEl = document.querySelector('[data-client-queue-estimate]');
   const queueTotalEl = document.querySelector('[data-client-queue-total]');
+  const queueRequestedEl = document.querySelector('[data-client-queue-requested]');
   const queueRefreshButton = document.querySelector('[data-client-queue-refresh]');
   const queueCancelButton = document.querySelector('[data-client-queue-cancel]');
 
@@ -221,6 +223,10 @@
 
   function getRunPayload() {
     const payload = { command: 'autoRun' };
+    const totalValue = runTotalInput ? sanitizeLimit(runTotalInput.value, 0, 1000) : 0;
+
+    if (totalValue > 0) {
+      payload.totalComments = totalValue;
     const maxValue = runMaxInput ? sanitizeLimit(runMaxInput.value, 1000, 1000) : 1000;
     const accountValue = runAccountsInput ? sanitizeLimit(runAccountsInput.value, 100, 100) : 100;
 
@@ -238,6 +244,12 @@
     if (!applied) {
       return;
     }
+    if (runTotalInput) {
+      if (applied.requestedComments != null) {
+        runTotalInput.value = applied.requestedComments;
+      } else if (!runTotalInput.value) {
+        runTotalInput.value = runTotalInput.defaultValue || '';
+      }
     if (runMaxInput && applied.maxCommentsPerAccount != null) {
       runMaxInput.value = applied.maxCommentsPerAccount;
     }
@@ -294,6 +306,10 @@
         const total = Number(queue.queueLength);
         queueTotalEl.textContent = Number.isFinite(total) ? total : '--';
       }
+      if (queueRequestedEl) {
+        const requested = Number(queue.job?.requestedComments ?? queue.job?.maxCommentsPerAccount);
+        queueRequestedEl.textContent = Number.isFinite(requested) && requested > 0 ? requested : '--';
+      }
       if (queueCancelButton) {
         const pendingJob = queue.job && queue.job.status === 'pending' && queue.job.id ? queue.job : null;
         if (pendingJob) {
@@ -316,6 +332,9 @@
         queueCancelButton.hidden = true;
         queueCancelButton.disabled = false;
         delete queueCancelButton.dataset.jobId;
+      }
+      if (queueRequestedEl) {
+        queueRequestedEl.textContent = '--';
       }
     }
 
@@ -476,6 +495,20 @@
           }
           if (data?.overrides?.applied) {
             const applied = data.overrides.applied;
+            const totalInfo =
+              applied.requestedComments != null
+                ? `${applied.requestedComments} comentário(s) totais`
+                : null;
+            const perAccountInfo =
+              applied.maxCommentsPerAccount != null
+                ? `${applied.maxCommentsPerAccount} comentário(s) por conta`
+                : null;
+            const accountInfo =
+              applied.accountLimit != null ? `${applied.accountLimit} conta(s)` : null;
+            const infoParts = [totalInfo, perAccountInfo, accountInfo].filter(Boolean);
+            if (infoParts.length) {
+              lines.push(`Limites aplicados: ${infoParts.join(' · ')}`);
+            }
             lines.push(
               `Limites aplicados: ${applied.maxCommentsPerAccount} comentário(s) · ${applied.accountLimit} conta(s)`,
             );

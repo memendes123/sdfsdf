@@ -140,6 +140,7 @@ const queueRunnerState = {
   lastOutcome: null,
   lastResult: null,
   lastError: null,
+  lastMessage: null,
 };
 
 function sanitizeQueueJob(job) {
@@ -187,6 +188,7 @@ function markQueueRunnerStart({ startedBy = null, options = null } = {}) {
   queueRunnerState.lastOutcome = null;
   queueRunnerState.lastResult = null;
   queueRunnerState.lastError = null;
+  queueRunnerState.lastMessage = null;
 }
 
 function markQueueRunnerProgress(update = {}) {
@@ -382,9 +384,18 @@ function buildLimitLabel(job) {
   }
   const maxComments = Number(job.maxCommentsPerAccount);
   const accountLimit = Number(job.accountLimit);
-  const commentsText = Number.isFinite(maxComments) ? `${maxComments} comentários/conta` : '—';
-  const accountsText = Number.isFinite(accountLimit) ? `${accountLimit} contas` : '—';
-  return `${commentsText} · ${accountsText}`;
+  const requested = Number(job.requestedComments);
+  const parts = [];
+  if (Number.isFinite(requested) && requested > 0) {
+    parts.push(`${requested} comentário${requested === 1 ? '' : 's'} totais`);
+  }
+  if (Number.isFinite(maxComments) && maxComments > 0) {
+    parts.push(`${maxComments} comentário${maxComments === 1 ? '' : 's'}/conta`);
+  }
+  if (Number.isFinite(accountLimit) && accountLimit > 0) {
+    parts.push(`${accountLimit} conta${accountLimit === 1 ? '' : 's'}`);
+  }
+  return parts.length ? parts.join(' · ') : '--';
 }
 
 function summarizePerAccount(perAccount = []) {
@@ -889,8 +900,9 @@ function extractSteamIdsFromSummary(summary) {
 }
 
 async function removeRemoteProfiles(summary, options = {}) {
-  const { apiClient = api, apiToken = null } = options;
-  const steamIds = extractSteamIdsFromSummary(summary);
+  const { apiClient = api, apiToken = null, skipSteamIds = [] } = options;
+  const skip = new Set((skipSteamIds || []).map((value) => String(value)));
+  const steamIds = extractSteamIdsFromSummary(summary).filter((id) => !skip.has(String(id)));
   if (!steamIds.length) {
     return { attempted: 0, removed: 0 };
   }
@@ -1050,7 +1062,11 @@ async function runFullCycle(options = {}) {
     accountLimit: maxAccounts,
   });
 
-  const cleanup = await removeRemoteProfiles(summary, { apiClient, apiToken });
+  const cleanup = await removeRemoteProfiles(summary, {
+    apiClient,
+    apiToken,
+    skipSteamIds: Array.isArray(summary?.removedSteamIds) ? summary.removedSteamIds : [],
+  });
   return { addResult, summary, cleanup };
 }
 
@@ -1166,6 +1182,8 @@ async function autoRun(options = {}) {
     filterProfiles,
     accountLimit = null,
     onFinish,
+    targetTotalComments = null,
+    refreshRemoteProfiles = false,
   } = options;
 
   const token = resolveApiToken(apiToken);
@@ -1195,23 +1213,109 @@ async function autoRun(options = {}) {
     return { totalComments: 0, perAccount: [] };
   }
 
-  let remoteProfiles;
+  let remoteProfiles = [];
   try {
     remoteProfiles = await apiClient.getSteamProfiles({ token });
   } catch (error) {
     log(`[API] Não foi possível obter os perfis do Rep4Rep: ${describeApiError(error)}`, true);
-    return { totalComments: 0, perAccount: [] };
   }
 
-  if (!Array.isArray(remoteProfiles) || remoteProfiles.length === 0) {
-    log('[API] Nenhum perfil Rep4Rep encontrado. Execute a sincronização antes do autoRun.', true);
-    return { totalComments: 0, perAccount: [] };
+  const remoteMap = new Map();
+  if (Array.isArray(remoteProfiles)) {
+    for (const remote of remoteProfiles) {
+      if (!remote) continue;
+      const keySource =
+        remote.steamId ?? remote.steamProfileId ?? remote.id ?? resolveRemoteProfileId(remote);
+      const key = keySource != null ? String(keySource) : null;
+      if (key) {
+        remoteMap.set(key, remote);
+      }
+    }
   }
 
-  const remoteMap = new Map(remoteProfiles.map((remote) => [String(remote.steamId), remote]));
+  const normalizedTargetTotal = Number.isFinite(targetTotalComments)
+    ? Math.max(0, Math.floor(targetTotalComments))
+    : null;
   const summary = { totalComments: 0, perAccount: [] };
+  if (normalizedTargetTotal != null) {
+    summary.requestedComments = normalizedTargetTotal;
+  }
+
+  let totalCommentsPosted = 0;
+  const removedDuringRun = new Set();
+
+  const syncRemoteProfile = async (profile, { forceRefresh = false } = {}) => {
+    if (!profile?.steamId) {
+      return null;
+    }
+
+    const steamIdKey = String(profile.steamId);
+
+    if (forceRefresh && remoteMap.has(steamIdKey)) {
+      try {
+        await apiClient.removeSteamProfile(profile.steamId, { token });
+      } catch (error) {
+        if (!(error instanceof ApiError && (error.status === 404 || error.status === 410))) {
+          log(`[${profile.username}] Falha ao limpar perfil antes da execução: ${describeApiError(error)}`);
+        }
+      }
+      remoteMap.delete(steamIdKey);
+      removedDuringRun.add(steamIdKey);
+    }
+
+    if (!remoteMap.has(steamIdKey)) {
+      try {
+        await apiClient.addSteamProfile(profile.steamId, { token });
+      } catch (error) {
+        if (!(error instanceof ApiError && error.status === 409)) {
+          log(`[${profile.username}] Falha ao adicionar perfil no Rep4Rep: ${describeApiError(error)}`);
+          return null;
+        }
+      }
+
+      try {
+        remoteProfiles = await apiClient.getSteamProfiles({ token });
+        if (Array.isArray(remoteProfiles)) {
+          for (const remote of remoteProfiles) {
+            if (!remote) continue;
+            const keySource =
+              remote.steamId ?? remote.steamProfileId ?? remote.id ?? resolveRemoteProfileId(remote);
+            const key = keySource != null ? String(keySource) : null;
+            if (key) {
+              remoteMap.set(key, remote);
+            }
+          }
+        }
+      } catch (error) {
+        log(`[${profile.username}] Falha ao atualizar lista de perfis: ${describeApiError(error)}`);
+      }
+    }
+
+    return remoteMap.get(steamIdKey) || null;
+  };
+
+  const removeRemoteAfterRun = async (profile) => {
+    if (!profile?.steamId) {
+      return;
+    }
+    const key = String(profile.steamId);
+    try {
+      await apiClient.removeSteamProfile(profile.steamId, { token });
+      removedDuringRun.add(key);
+    } catch (error) {
+      if (!(error instanceof ApiError && (error.status === 404 || error.status === 410))) {
+        log(`[${profile.username}] Falha ao remover perfil após execução: ${describeApiError(error)}`);
+      }
+    } finally {
+      remoteMap.delete(key);
+    }
+  };
 
   for (const [index, accountLine] of selectedAccounts.entries()) {
+    if (normalizedTargetTotal != null && totalCommentsPosted >= normalizedTargetTotal) {
+      break;
+    }
+
     let account;
     try {
       account = parseAccountLine(accountLine);
@@ -1241,85 +1345,101 @@ async function autoRun(options = {}) {
       continue;
     }
 
-    let remoteProfile = remoteMap.get(String(profile.steamId));
-    if (!remoteProfile) {
-      log(`[${account.username}] perfil não sincronizado com Rep4Rep. Tentando adicionar...`);
-      try {
-        await apiClient.addSteamProfile(profile.steamId, { token });
-        remoteProfiles = await apiClient.getSteamProfiles({ token });
-        remoteProfile = remoteProfiles.find((item) => String(item.steamId) === String(profile.steamId));
-        if (remoteProfile) {
-          remoteMap.set(String(profile.steamId), remoteProfile);
-        }
-      } catch (error) {
-        log(`[${account.username}] Falha ao sincronizar perfil: ${describeApiError(error)}`);
-        continue;
-      }
-    }
-
-    const remoteProfileId = resolveRemoteProfileId(remoteProfile);
-    if (!remoteProfileId) {
-      log(`[${account.username}] Não foi possível determinar o ID remoto do perfil.`);
-      continue;
-    }
-
-    const client = createSteamBot();
-    let loginResult;
-    try {
-      loginResult = await loginWithRetries(
-        client,
-        {
-          username: account.username,
-          password: account.password,
-          sharedSecret: account.sharedSecret,
-          cookies: profile.cookies,
-        },
-        null,
-        null,
-        null,
-        options.loginOptions,
-      );
-    } catch (error) {
-      log(`[${account.username}] Falha ao autenticar: ${error.message}`);
-      continue;
-    }
-
-    if (!loginResult?.success) {
-      if (loginResult?.requiresAction) {
-        log(`[${account.username}] requer autenticação manual para atualizar cookies.`);
-      }
-      continue;
-    }
-
+    let remotePrepared = false;
     let comments = 0;
     let stoppedEarly = false;
+
     try {
-      const result = await runTasksForProfile({
-        profile,
-        client,
-        remoteProfileId,
-        apiClient,
-        apiToken: token,
-        maxComments: Math.max(1, maxCommentsPerAccount),
-        commentDelay,
-        onTaskComplete,
-      });
-      comments = result?.commentsPosted ?? 0;
-      stoppedEarly = Boolean(result?.stoppedEarly);
-    } catch (error) {
-      log(`[${account.username}] Falha ao processar tarefas: ${error.message}`);
+      const remoteProfile = await syncRemoteProfile(profile, { forceRefresh: refreshRemoteProfiles });
+      if (!remoteProfile) {
+        continue;
+      }
+
+      remotePrepared = true;
+
+      const remoteProfileId = resolveRemoteProfileId(remoteProfile);
+      if (!remoteProfileId) {
+        log(`[${account.username}] Não foi possível determinar o ID remoto do perfil.`);
+        continue;
+      }
+
+      const client = createSteamBot();
+      let loginResult;
+      try {
+        loginResult = await loginWithRetries(
+          client,
+          {
+            username: account.username,
+            password: account.password,
+            sharedSecret: account.sharedSecret,
+            cookies: profile.cookies,
+          },
+          null,
+          null,
+          null,
+          options.loginOptions,
+        );
+      } catch (error) {
+        log(`[${account.username}] Falha ao autenticar: ${error.message}`);
+        continue;
+      }
+
+      if (!loginResult?.success) {
+        if (loginResult?.requiresAction) {
+          log(`[${account.username}] requer autenticação manual para atualizar cookies.`);
+        }
+        continue;
+      }
+
+      let effectiveMaxComments = Math.max(1, maxCommentsPerAccount);
+      if (normalizedTargetTotal != null) {
+        const remainingForTotal = Math.max(0, normalizedTargetTotal - totalCommentsPosted);
+        if (remainingForTotal <= 0) {
+          break;
+        }
+        effectiveMaxComments = Math.min(effectiveMaxComments, remainingForTotal);
+      }
+
+      try {
+        const result = await runTasksForProfile({
+          profile,
+          client,
+          remoteProfileId,
+          apiClient,
+          apiToken: token,
+          maxComments: effectiveMaxComments,
+          commentDelay,
+          onTaskComplete,
+        });
+        comments = result?.commentsPosted ?? 0;
+        stoppedEarly = Boolean(result?.stoppedEarly);
+      } catch (error) {
+        log(`[${account.username}] Falha ao processar tarefas: ${error.message}`);
+      }
+    } finally {
+      if (remotePrepared) {
+        await removeRemoteAfterRun(profile);
+      }
     }
 
-    summary.perAccount.push({
-      username: account.username,
-      steamId: profile.steamId,
-      comments,
-      stoppedEarly,
-    });
-    summary.totalComments += comments;
+    if (comments > 0 || stoppedEarly) {
+      summary.perAccount.push({
+        username: account.username,
+        steamId: profile.steamId,
+        comments,
+        stoppedEarly,
+      });
+      summary.totalComments += comments;
+      totalCommentsPosted += comments;
+    }
 
     if (stoppedEarly) {
       log('Limite de execução atingido. Encerrando autoRun.');
+      break;
+    }
+
+    if (normalizedTargetTotal != null && totalCommentsPosted >= normalizedTargetTotal) {
+      log('Quantidade total solicitada atingida. Encerrando autoRun.');
       break;
     }
 
@@ -1327,6 +1447,8 @@ async function autoRun(options = {}) {
       await sleep(loginDelay);
     }
   }
+
+  summary.removedSteamIds = Array.from(removedDuringRun);
 
   log(`✅ autoRun concluído. Total de comentários enviados: ${summary.totalComments}`);
   if (typeof onFinish === 'function') {
@@ -1539,8 +1661,13 @@ async function prioritizedAutoRun(options = {}) {
 
     const jobMaxComments = Math.min(1000, Math.max(1, job.maxCommentsPerAccount || maxComments));
     const jobAccountLimit = Math.min(100, Math.max(1, job.accountLimit || accountLimit));
+    const rawRequested = Number.isFinite(job.requestedComments)
+      ? Math.floor(job.requestedComments)
+      : null;
+    const requestedTotal = rawRequested != null && rawRequested > 0 ? rawRequested : null;
 
     let usedCredits = 0;
+    let processedComments = 0;
     const upstreamTaskHandler = baseRunOptions.onTaskComplete;
     const onTaskComplete = async (payload) => {
       if (typeof upstreamTaskHandler === 'function') {
@@ -1554,12 +1681,20 @@ async function prioritizedAutoRun(options = {}) {
         }
       }
 
-      if (isAdmin) {
-        return true;
+      processedComments += 1;
+      if (!isAdmin) {
+        usedCredits += 1;
       }
 
-      usedCredits += 1;
-      return usedCredits < creditLimit;
+      if (requestedTotal != null && processedComments >= requestedTotal) {
+        return false;
+      }
+
+      if (!isAdmin) {
+        return usedCredits < creditLimit;
+      }
+
+      return true;
     };
 
     log(
@@ -1573,10 +1708,13 @@ async function prioritizedAutoRun(options = {}) {
         maxCommentsPerAccount: jobMaxComments,
         accountLimit: jobAccountLimit,
         onTaskComplete,
+        targetTotalComments: requestedTotal,
+        refreshRemoteProfiles: true,
       });
 
       const totalComments = summary?.totalComments ?? 0;
-      const consumed = isAdmin ? 0 : Math.min(creditLimit, usedCredits, totalComments);
+      const maxBillable = requestedTotal != null ? Math.min(requestedTotal, totalComments) : totalComments;
+      const consumed = isAdmin ? 0 : Math.min(creditLimit, usedCredits, maxBillable);
 
       let updatedUser = null;
       if (!isAdmin && consumed > 0) {
@@ -1600,6 +1738,7 @@ async function prioritizedAutoRun(options = {}) {
       const cleanup = await removeRemoteProfiles(summary, {
         apiToken,
         apiClient: baseRunOptions.apiClient || api,
+        skipSteamIds: Array.isArray(summary?.removedSteamIds) ? summary.removedSteamIds : [],
       });
 
       const completedJob = await runQueue.completeJob(job.id, {

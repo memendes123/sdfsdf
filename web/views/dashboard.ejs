@@ -54,6 +54,10 @@
             <form class="run-config" data-auto-run-form>
                 <div class="run-config__grid">
                     <label>
+                        <span>Total de comentários</span>
+                        <input type="number" min="1" max="1000" step="1" value="<%= (initialRunner && initialRunner.options && initialRunner.options.requestedComments) || '' %>" data-auto-run-total placeholder="Opcional" />
+                    </label>
+                    <label>
                         <span>Comentários por conta</span>
                         <input type="number" min="1" max="1000" step="1" value="<%= (initialRunner && initialRunner.options && initialRunner.options.maxCommentsPerAccount) || 1000 %>" data-auto-run-max />
                     </label>
@@ -66,6 +70,7 @@
                         <input type="password" data-auto-run-key placeholder="Sobrescrever key do admin" />
                     </label>
                 </div>
+                <p class="run-config__hint">Valores máximos: 1000 comentários totais, 1000 por conta e 100 contas por execução.</p>
                 <p class="run-config__hint">Valores máximos: 1000 comentários por conta e 100 contas por execução.</p>
             </form>
             <div class="quick-actions">

@@ -184,22 +184,42 @@ router.post('/run', async (req, res) => {
     return res.status(400).json({ success: false, error: 'Defina a chave Rep4Rep antes de executar comandos.' });
   }
 
-  let remoteProfiles;
+  let remoteProfiles = [];
   try {
     remoteProfiles = await rep4repApi.getSteamProfiles({ token: req.user.rep4repKey });
   } catch (error) {
     return res.status(502).json({ success: false, error: describeApiError(error) });
   }
 
-  if (!Array.isArray(remoteProfiles) || remoteProfiles.length === 0) {
-    return res.status(400).json({
-      success: false,
-      error: 'Nenhum perfil Rep4Rep encontrado. Adicione contas antes de executar o comando.',
-    });
+  const requestedTotalRaw =
+    req.body?.totalComments ?? req.body?.tasks ?? req.body?.requestedComments ?? null;
+  const requestedTotal = sanitizeOptionalLimit(requestedTotalRaw, null, 1000);
+
+  if (!isAdmin && requestedTotal == null) {
+    return res.status(400).json({ success: false, error: 'Informe a quantidade de comentários que deseja executar.' });
   }
 
-  const sanitizedMax = sanitizeOptionalLimit(maxCommentsPerAccount, DEFAULT_MAX_COMMENTS, 1000);
-  const sanitizedAccounts = sanitizeOptionalLimit(accountLimit, DEFAULT_ACCOUNT_LIMIT, 100);
+  let sanitizedMax = sanitizeOptionalLimit(maxCommentsPerAccount, DEFAULT_MAX_COMMENTS, 1000);
+  let sanitizedAccounts = sanitizeOptionalLimit(accountLimit, DEFAULT_ACCOUNT_LIMIT, 100);
+  let effectiveRequested = requestedTotal;
+
+  if (!isAdmin) {
+    if (requestedTotal != null) {
+      sanitizedMax = Math.min(DEFAULT_MAX_COMMENTS, Math.max(1, requestedTotal));
+      const baseAccounts = Math.max(1, Math.ceil(requestedTotal / sanitizedMax));
+      const buffered = Math.min(DEFAULT_ACCOUNT_LIMIT, baseAccounts + 5);
+      sanitizedAccounts = Math.max(baseAccounts, buffered);
+      effectiveRequested = requestedTotal;
+    } else {
+      sanitizedMax = DEFAULT_MAX_COMMENTS;
+      sanitizedAccounts = DEFAULT_ACCOUNT_LIMIT;
+      effectiveRequested = null;
+    }
+  } else {
+    if (requestedTotal != null) {
+      effectiveRequested = requestedTotal;
+    }
+  }
 
   try {
     const enqueue = await runQueue.enqueueJob({
@@ -207,6 +227,7 @@ router.post('/run', async (req, res) => {
       command: 'autoRun',
       maxCommentsPerAccount: sanitizedMax,
       accountLimit: sanitizedAccounts,
+      requestedComments: effectiveRequested || 0,
     });
 
     const queueStatus = await runQueue.getUserQueueStatus(req.user.id);
@@ -222,10 +243,12 @@ router.post('/run', async (req, res) => {
         requested: {
           maxCommentsPerAccount: maxCommentsPerAccount ?? null,
           accountLimit: accountLimit ?? null,
+          requestedComments: requestedTotal ?? null,
         },
         applied: {
           maxCommentsPerAccount: sanitizedMax,
           accountLimit: sanitizedAccounts,
+          requestedComments: effectiveRequested ?? null,
         },
       },
     });

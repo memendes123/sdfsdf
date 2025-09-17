@@ -149,6 +149,11 @@
                         <button type="submit" class="btn btn--secondary">Guardar key</button>
                     </form>
                     <div class="client-run">
+                        <p>Informe quantos comentários deseja receber. Cada comentário consome 1 crédito e o bot adiciona contas extras automaticamente, comentando e removendo tudo ao final.</p>
+                        <div class="client-run__inputs">
+                            <label>
+                                <span>Total de comentários desejado</span>
+                                <input type="number" min="1" max="1000" step="1" value="10" data-run-total />
                         <p>Quando você clica em “Rodar tarefas” cada comentário consome 1 crédito. Ao chegar em zero, o bot pausa automaticamente.</p>
                         <div class="client-run__inputs">
                             <label>
@@ -188,6 +193,10 @@
                             <div>
                                 <dt>Pedidos na fila</dt>
                                 <dd data-client-queue-total>--</dd>
+                            </div>
+                            <div>
+                                <dt>Comentários pedidos</dt>
+                                <dd data-client-queue-requested>--</dd>
                             </div>
                         </dl>
                     </div>

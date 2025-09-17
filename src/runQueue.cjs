@@ -27,6 +27,7 @@ function mapQueueRow(row) {
     status: row.status,
     maxCommentsPerAccount: row.maxCommentsPerAccount != null ? Number(row.maxCommentsPerAccount) : 1000,
     accountLimit: row.accountLimit != null ? Number(row.accountLimit) : 100,
+    requestedComments: row.requestedComments != null ? Number(row.requestedComments) : 0,
     enqueuedAt: row.enqueuedAt,
     startedAt: row.startedAt || null,
     finishedAt: row.finishedAt || null,
@@ -94,7 +95,13 @@ function sanitizeLimit(value, fallback, max) {
   return Math.min(max, Math.max(1, Math.floor(num)));
 }
 
-async function enqueueJob({ userId, command = 'autoRun', maxCommentsPerAccount = 1000, accountLimit = 100 }) {
+async function enqueueJob({
+  userId,
+  command = 'autoRun',
+  maxCommentsPerAccount = 1000,
+  accountLimit = 100,
+  requestedComments = 0,
+}) {
   if (!userId) {
     throw new Error('userId obrigatório para enfileirar execução.');
   }
@@ -114,10 +121,14 @@ async function enqueueJob({ userId, command = 'autoRun', maxCommentsPerAccount =
   const sanitizedMax = sanitizeLimit(maxCommentsPerAccount, 1000, 1000);
   const sanitizedAccounts = sanitizeLimit(accountLimit, 100, 100);
 
+  const sanitizedRequested = Number.isFinite(requestedComments)
+    ? Math.max(0, Math.floor(requestedComments))
+    : 0;
+
   await connection.run(
-    `INSERT INTO run_queue (id, userId, command, status, maxCommentsPerAccount, accountLimit, enqueuedAt)
-     VALUES (?, ?, ?, 'pending', ?, ?, ?)`,
-    [id, userId, command || 'autoRun', sanitizedMax, sanitizedAccounts, enqueuedAt],
+    `INSERT INTO run_queue (id, userId, command, status, maxCommentsPerAccount, accountLimit, requestedComments, enqueuedAt)
+     VALUES (?, ?, ?, 'pending', ?, ?, ?, ?)`,
+    [id, userId, command || 'autoRun', sanitizedMax, sanitizedAccounts, sanitizedRequested, enqueuedAt],
   );
 
   const inserted = await connection.get(`${buildJobWithUserQuery()} WHERE q.id = ?`, [id]);
