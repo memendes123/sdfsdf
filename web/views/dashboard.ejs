@@ -8,6 +8,11 @@
             <button class="btn btn--secondary" data-command="backup">💾 Criar backup</button>
             <a class="btn btn--ghost" href="<%= base %>/logs">📜 Ver logs</a>
         </div>
+        <div class="watchdog-banner" data-watchdog-state-container>
+            <span class="badge badge--muted">Modo vigia</span>
+            <span class="watchdog-banner__state" data-watchdog-state data-state="off">desligado</span>
+            <span class="watchdog-banner__info">última execução: <strong data-watchdog-last-run>—</strong></span>
+        </div>
             <p class="hero__hint">Dica: configure o arquivo <code>accounts.txt</code>, mantenha o bot do terminal rodando com a sua key e libere créditos apenas após validar os dados do cliente.</p>
         <p class="hero__hint">Dica: configure o arquivo <code>accounts.txt</code> e garanta que o <code>REP4REP_KEY</code> está definido antes de rodar as automações.</p>
     </div>
@@ -61,6 +66,106 @@
         </header>
         <div class="card__body">
             <pre class="command-output" data-command-output>Selecione um comando para ver o resultado aqui.</pre>
+        </div>
+    </article>
+    <article class="card">
+        <header class="card__header">
+            <div>
+                <h2>Modo VPS / Vigia automático</h2>
+                <p>Mantenha o bot ativo em segundo plano verificando prioridades a cada ciclo.</p>
+            </div>
+        </header>
+        <div class="card__body card__body--spaced watchdog-card">
+            <dl class="watchdog-stats">
+                <div>
+                    <dt>Status</dt>
+                    <dd data-watchdog-state data-state="off">desligado</dd>
+                </div>
+                <div>
+                    <dt>Intervalo</dt>
+                    <dd data-watchdog-interval>--</dd>
+                </div>
+                <div>
+                    <dt>Última execução</dt>
+                    <dd data-watchdog-last-run>—</dd>
+                </div>
+            </dl>
+            <p class="watchdog-error" data-watchdog-error></p>
+            <div class="watchdog-actions">
+                <button class="btn btn--primary" data-command="watchdogStart">Iniciar vigia</button>
+                <button class="btn btn--outline" data-command="watchdogStop">Parar</button>
+                <button class="btn btn--ghost" data-watchdog-refresh>Atualizar status</button>
+            </div>
+            <p class="watchdog-note">O vigia executa o <strong>autoRun prioritário</strong> em ciclos e respeita os limites (100 contas / 1000 comentários). Configure o intervalo via <code>KEEPALIVE_INTERVAL_MINUTES</code> no seu <code>.env</code>.</p>
+        </div>
+    </article>
+    <article class="card queue-card">
+        <header class="card__header">
+            <div>
+                <h2>Fila de execuções</h2>
+                <p>Acompanhe os pedidos dos clientes e a previsão média para início.</p>
+            </div>
+            <button class="btn btn--ghost" type="button" data-queue-refresh>Atualizar fila</button>
+        </header>
+        <div class="card__body card__body--spaced">
+            <div class="queue-metrics">
+                <div>
+                    <span class="queue-metrics__value" data-queue-length><%= initialQueue ? initialQueue.queueLength : 0 %></span>
+                    <span class="queue-metrics__label">Pedidos na fila</span>
+                </div>
+                <div>
+                    <span class="queue-metrics__value" data-queue-average><%= initialQueue && initialQueue.averageDurationMs ? Math.round(initialQueue.averageDurationMs / 60000) + ' min' : '--' %></span>
+                    <span class="queue-metrics__label">Duração média</span>
+                </div>
+            </div>
+            <div class="queue-table-wrapper">
+                <table class="queue-table">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Cliente</th>
+                            <th>Status</th>
+                            <th>Enfileirado em</th>
+                            <th>Comentários</th>
+                        </tr>
+                    </thead>
+                    <tbody data-queue-body>
+                        <% if (initialQueue && initialQueue.jobs && initialQueue.jobs.length) { %>
+                            <% initialQueue.jobs.forEach(function(job, index) { %>
+                                <tr>
+                                    <td><%= (job.position || index + 1) %></td>
+                                    <td>
+                                        <strong><%= job.user && (job.user.fullName || job.user.username || job.user.id) %></strong>
+                                        <span class="queue-table__meta"><%= job.user && job.user.username ? '@' + job.user.username : job.user && job.user.id %></span>
+                                    </td>
+                                    <td>
+                                        <span class="badge badge--status badge--<%= job.status === 'running' ? 'active' : 'pending' %>"><%= job.status %></span>
+                                    </td>
+                                    <td><%= job.enqueuedAt ? new Date(job.enqueuedAt).toLocaleString('pt-PT') : '—' %></td>
+                                    <td><%= job.totalComments || 0 %></td>
+                                </tr>
+                            <% }) %>
+                        <% } else { %>
+                            <tr data-queue-empty-row>
+                                <td colspan="5" class="is-center is-muted">Nenhum pedido aguardando processamento.</td>
+                            </tr>
+                        <% } %>
+                    </tbody>
+                </table>
+            </div>
+            <details class="queue-history" data-queue-history-container <%= initialQueue && initialQueue.history && initialQueue.history.length ? '' : 'hidden' %>>
+                <summary>Histórico recente</summary>
+                <ul class="queue-history__list" data-queue-history>
+                    <% if (initialQueue && initialQueue.history && initialQueue.history.length) { %>
+                        <% initialQueue.history.forEach(function(item) { %>
+                            <li>
+                                <strong><%= item.user && (item.user.fullName || item.user.username || item.user.id) %></strong>
+                                <span>— <%= item.status %> em <%= item.finishedAt ? new Date(item.finishedAt).toLocaleString('pt-PT') : '—' %></span>
+                            </li>
+                        <% }) %>
+                    <% } %>
+                </ul>
+            </details>
         </div>
     </article>
 </section>
@@ -186,4 +291,76 @@
 
 <div class="toast" data-toast hidden></div>
 
-<%- include('partials/layout-end', { includePanelScript: true }) %>
+<div class="user-editor" data-user-editor>
+    <div class="user-editor__container">
+        <header class="user-editor__header">
+            <h3 data-user-editor-title>Gerenciar cliente</h3>
+            <button type="button" class="btn btn--pill" data-user-editor-close>✕</button>
+        </header>
+        <form class="user-editor__form" data-user-editor-form>
+            <div class="user-editor__grid">
+                <label>
+                    <span>Nome completo</span>
+                    <input type="text" name="fullName" required />
+                </label>
+                <label>
+                    <span>Username</span>
+                    <input type="text" name="username" required />
+                </label>
+                <label>
+                    <span>Email</span>
+                    <input type="email" name="email" required />
+                </label>
+                <label>
+                    <span>Telefone / WhatsApp</span>
+                    <input type="tel" name="phoneNumber" required />
+                </label>
+                <label>
+                    <span>Discord ID</span>
+                    <input type="text" name="discordId" required />
+                </label>
+                <label>
+                    <span>Rep4Rep ID</span>
+                    <input type="text" name="rep4repId" required />
+                </label>
+                <label class="user-editor__field--wide">
+                    <span>Chave Rep4Rep</span>
+                    <input type="text" name="rep4repKey" placeholder="Cole aqui a chave do cliente" />
+                </label>
+                <label>
+                    <span>Data de nascimento</span>
+                    <input type="date" name="dateOfBirth" required />
+                </label>
+                <label>
+                    <span>Créditos</span>
+                    <input type="number" name="credits" min="0" step="1" />
+                </label>
+                <label>
+                    <span>Status</span>
+                    <select name="status" required>
+                        <option value="active">ativo</option>
+                        <option value="pending">pendente</option>
+                        <option value="blocked">bloqueado</option>
+                    </select>
+                </label>
+                <label>
+                    <span>Nível de acesso</span>
+                    <select name="role" required>
+                        <option value="customer">cliente</option>
+                        <option value="admin">admin</option>
+                    </select>
+                </label>
+                <label>
+                    <span>Nova senha (opcional)</span>
+                    <input type="password" name="password" placeholder="Deixe vazio para manter" />
+                </label>
+            </div>
+            <footer class="user-editor__footer">
+                <button type="submit" class="btn btn--primary">Guardar alterações</button>
+                <button type="button" class="btn btn--ghost" data-user-editor-close>Cancelar</button>
+            </footer>
+        </form>
+    </div>
+</div>
+
+<%- include('partials/layout-end', { includePanelScript: true, initialQueue: initialQueue }) %>

@@ -12,19 +12,30 @@
     cooling: document.querySelector('[data-stat-cooling]'),
     comments: document.querySelector('[data-stat-comments]'),
   };
+  const watchdogStateEls = document.querySelectorAll('[data-watchdog-state]');
+  const watchdogIntervalEls = document.querySelectorAll('[data-watchdog-interval]');
+  const watchdogLastRunEls = document.querySelectorAll('[data-watchdog-last-run]');
+  const watchdogErrorEl = document.querySelector('[data-watchdog-error]');
+  const userEditor = document.querySelector('[data-user-editor]');
+  const userEditorForm = document.querySelector('[data-user-editor-form]');
+  const userEditorCloseButtons = document.querySelectorAll('[data-user-editor-close]');
+  const userEditorTitle = document.querySelector('[data-user-editor-title]');
+  const queueLengthEl = document.querySelector('[data-queue-length]');
+  const queueAverageEl = document.querySelector('[data-queue-average]');
+  const queueBody = document.querySelector('[data-queue-body]');
+  const queueHistoryContainer = document.querySelector('[data-queue-history-container]');
+  const queueHistoryList = document.querySelector('[data-queue-history]');
+  const queueRefreshButton = document.querySelector('[data-queue-refresh]');
 
   let toastTimeout = null;
+  let cachedUsers = [];
+  let cachedQueue = window.__INITIAL_QUEUE__ || null;
 
   function showToast(message, variant = 'success') {
     if (!toastEl) return;
     toastEl.textContent = message;
     toastEl.classList.remove('is-visible', 'is-error', 'is-success');
-    if (variant === 'error') {
-      toastEl.classList.add('is-error');
-    } else {
-      toastEl.classList.add('is-success');
-    }
-    // Trigger reflow for restart animation
+    toastEl.classList.add(variant === 'error' ? 'is-error' : 'is-success');
     void toastEl.offsetWidth;
     toastEl.classList.add('is-visible');
     clearTimeout(toastTimeout);
@@ -56,6 +67,7 @@
 
   function renderUsers(users) {
     if (!userTableBody) return;
+    cachedUsers = Array.isArray(users) ? users : [];
     userTableBody.innerHTML = '';
 
     if (!Array.isArray(users) || users.length === 0) {
@@ -77,7 +89,7 @@
       const identification = document.createElement('div');
       identification.className = 'user-identification';
       const strong = document.createElement('strong');
-      strong.textContent = user.fullName || user.displayName || user.username;
+      strong.textContent = user.fullName || user.displayName || user.username || 'Cliente';
       const email = document.createElement('span');
       email.textContent = user.email;
       identification.appendChild(strong);
@@ -157,6 +169,13 @@
         actions.appendChild(button);
       });
 
+      const manageButton = document.createElement('button');
+      manageButton.type = 'button';
+      manageButton.className = 'btn btn--pill btn--ghost';
+      manageButton.dataset.userManage = user.id;
+      manageButton.textContent = 'Gerenciar';
+      actions.appendChild(manageButton);
+
       actionsCell.appendChild(actions);
 
       row.appendChild(nameCell);
@@ -165,6 +184,143 @@
 
       userTableBody.appendChild(row);
     });
+  }
+
+  function formatQueueDuration(ms) {
+    const value = Number(ms);
+    if (!Number.isFinite(value) || value <= 0) {
+      return '--';
+    }
+    const minutes = Math.round(value / 60000);
+    if (minutes < 60) {
+      return `${minutes} min`;
+    }
+    const hours = minutes / 60;
+    return `${hours.toFixed(hours >= 10 ? 0 : 1)} h`;
+  }
+
+  function renderQueue(queue) {
+    if (!queueBody) {
+      return;
+    }
+
+    const jobs = Array.isArray(queue?.jobs) ? queue.jobs : [];
+    queueBody.innerHTML = '';
+
+    if (jobs.length === 0) {
+      const row = document.createElement('tr');
+      const cell = document.createElement('td');
+      cell.colSpan = 5;
+      cell.className = 'is-center is-muted';
+      cell.textContent = 'Nenhum pedido aguardando processamento.';
+      row.appendChild(cell);
+      queueBody.appendChild(row);
+    } else {
+      jobs.forEach((job, index) => {
+        const row = document.createElement('tr');
+
+        const positionCell = document.createElement('td');
+        positionCell.textContent = job.position != null ? job.position : index + 1;
+        row.appendChild(positionCell);
+
+        const clientCell = document.createElement('td');
+        const strong = document.createElement('strong');
+        const user = job.user || {};
+        strong.textContent = user.fullName || user.username || user.id || 'Cliente';
+        const meta = document.createElement('span');
+        meta.className = 'queue-table__meta';
+        meta.textContent = user.username ? `@${user.username}` : user.id || '';
+        clientCell.appendChild(strong);
+        if (meta.textContent) {
+          clientCell.appendChild(meta);
+        }
+        row.appendChild(clientCell);
+
+        const statusCell = document.createElement('td');
+        const statusBadge = document.createElement('span');
+        const normalizedStatus = job.status === 'running' ? 'active' : 'pending';
+        statusBadge.className = `badge badge--status badge--${normalizedStatus}`;
+        statusBadge.textContent = job.status || 'pending';
+        statusCell.appendChild(statusBadge);
+        row.appendChild(statusCell);
+
+        const enqueueCell = document.createElement('td');
+        enqueueCell.textContent = job.enqueuedAt
+          ? new Date(job.enqueuedAt).toLocaleString()
+          : '—';
+        row.appendChild(enqueueCell);
+
+        const commentsCell = document.createElement('td');
+        const comments = Number(job.totalComments);
+        commentsCell.textContent = Number.isFinite(comments) && comments > 0 ? comments : '—';
+        row.appendChild(commentsCell);
+
+        queueBody.appendChild(row);
+      });
+    }
+
+    if (queueLengthEl) {
+      const lengthValue = Number(queue?.queueLength);
+      queueLengthEl.textContent = Number.isFinite(lengthValue) ? lengthValue : jobs.length;
+    }
+    if (queueAverageEl) {
+      queueAverageEl.textContent = formatQueueDuration(queue?.averageDurationMs);
+    }
+
+    if (queueHistoryContainer && queueHistoryList) {
+      const history = Array.isArray(queue?.history) ? queue.history : [];
+      queueHistoryContainer.hidden = history.length === 0;
+      queueHistoryList.innerHTML = '';
+      history.forEach((item) => {
+        const li = document.createElement('li');
+        const strong = document.createElement('strong');
+        const user = item.user || {};
+        strong.textContent = user.fullName || user.username || user.id || 'Cliente';
+        const span = document.createElement('span');
+        const finishedText = item.finishedAt
+          ? new Date(item.finishedAt).toLocaleString()
+          : '—';
+        span.textContent = ` — ${item.status} em ${finishedText}`;
+        li.appendChild(strong);
+        li.appendChild(span);
+        queueHistoryList.appendChild(li);
+      });
+    }
+  }
+
+  function renderWatchdog(status) {
+    if (!status) {
+      watchdogStateEls.forEach((el) => {
+        el.textContent = 'desligado';
+        el.dataset.state = 'off';
+      });
+      watchdogIntervalEls.forEach((el) => {
+        el.textContent = '--';
+      });
+      watchdogLastRunEls.forEach((el) => {
+        el.textContent = '—';
+      });
+      if (watchdogErrorEl) watchdogErrorEl.textContent = '';
+      return;
+    }
+
+    watchdogStateEls.forEach((el) => {
+      el.textContent = status.running ? 'ativo' : 'desligado';
+      el.dataset.state = status.running ? 'on' : 'off';
+    });
+    watchdogIntervalEls.forEach((el) => {
+      el.textContent = status.intervalMinutes
+        ? `${status.intervalMinutes} min`
+        : '--';
+    });
+    watchdogLastRunEls.forEach((el) => {
+      el.textContent = status.lastRunAt
+        ? new Date(status.lastRunAt).toLocaleString()
+        : '—';
+    });
+    if (watchdogErrorEl) {
+      watchdogErrorEl.textContent = status.lastError ? `⚠️ ${status.lastError}` : '';
+    }
   }
 
   async function refreshStats() {
@@ -191,6 +347,36 @@
     } catch (error) {
       console.error(error);
       showToast(error.message || 'Erro ao carregar usuários.', 'error');
+    }
+  }
+
+  async function refreshWatchdog() {
+    try {
+      const res = await fetch(buildUrl('/api/watchdog'));
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data?.watchdog) {
+        renderWatchdog(data.watchdog);
+      }
+    } catch (error) {
+      console.error('Falha ao obter status do vigia:', error);
+    }
+  }
+
+  async function refreshQueue() {
+    try {
+      const res = await fetch(buildUrl('/api/queue'));
+      if (!res.ok) {
+        throw new Error('Falha ao obter fila.');
+      }
+      const data = await res.json();
+      if (data?.queue) {
+        cachedQueue = data.queue;
+        renderQueue(cachedQueue);
+      }
+    } catch (error) {
+      console.error('[Painel] Falha ao atualizar fila:', error);
+      showToast(error.message || 'Erro ao atualizar fila.', 'error');
     }
   }
 
@@ -230,13 +416,20 @@
             lines.push(`- ${item.username || 'desconhecido'}: ${item.comments ?? 0}${suffix}`);
           });
           outputEl.textContent = lines.join('\n');
-        } else {
+        } else if (!['watchdogStart', 'watchdogStop', 'watchdogStatus'].includes(command)) {
           outputEl.textContent = message;
         }
       }
 
       if (data.stats) {
         renderStats(data.stats);
+      }
+      if (data.watchdog) {
+        renderWatchdog(data.watchdog);
+      }
+      if (data.queue) {
+        cachedQueue = data.queue;
+        renderQueue(cachedQueue);
       }
 
       showToast(message, 'success');
@@ -245,6 +438,7 @@
       }
       if (command === 'autoRun') {
         refreshUsers();
+        refreshQueue();
       }
     } catch (error) {
       if (outputEl) {
@@ -256,12 +450,62 @@
     }
   }
 
+  function populateUserEditor(user) {
+    if (!userEditor || !userEditorForm || !user) return;
+    userEditor.classList.add('is-visible');
+    userEditorForm.dataset.userId = user.id;
+    userEditorForm.reset();
+    if (userEditorTitle) {
+      userEditorTitle.textContent = user.fullName || user.username || user.email;
+    }
+
+    const field = (name) => userEditorForm.querySelector(`[name="${name}"]`);
+    const setValue = (name, value = '') => {
+      const input = field(name);
+      if (input) {
+        input.value = value ?? '';
+      }
+    };
+
+    setValue('fullName', user.fullName || '');
+    setValue('username', user.username || '');
+    setValue('email', user.email || '');
+    setValue('phoneNumber', user.phoneNumber || '');
+    setValue('discordId', user.discordId || '');
+    setValue('rep4repId', user.rep4repId || '');
+    setValue('rep4repKey', user.rep4repKey || '');
+    setValue('dateOfBirth', user.dateOfBirth || '');
+    setValue('credits', Number.isFinite(user.credits) ? user.credits : 0);
+    setValue('status', user.status || 'pending');
+    setValue('role', user.role || 'customer');
+    setValue('password', '');
+  }
+
+  function closeEditor() {
+    if (!userEditor || !userEditorForm) return;
+    userEditor.classList.remove('is-visible');
+    userEditorForm.dataset.userId = '';
+    userEditorForm.reset();
+  }
+
   document.querySelectorAll('[data-command]').forEach((button) => {
     button.addEventListener('click', () => {
       const command = button.getAttribute('data-command');
       runCommand(command, button);
     });
   });
+
+  document.querySelectorAll('[data-watchdog-refresh]').forEach((button) => {
+    button.addEventListener('click', () => {
+      refreshWatchdog();
+    });
+  });
+
+  if (queueRefreshButton) {
+    queueRefreshButton.addEventListener('click', () => {
+      refreshQueue();
+    });
+  }
 
   if (userForm) {
     userForm.addEventListener('submit', async (event) => {
@@ -272,7 +516,8 @@
         payload.credits = Number(payload.credits);
       }
       try {
-        userForm.querySelector('button[type="submit"]').disabled = true;
+        const submitButton = userForm.querySelector('button[type="submit"]');
+        if (submitButton) submitButton.disabled = true;
         const res = await fetch(buildUrl('/api/users'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -288,49 +533,107 @@
       } catch (error) {
         showToast(error.message || 'Erro ao cadastrar cliente.', 'error');
       } finally {
-        userForm.querySelector('button[type="submit"]').disabled = false;
+        const submitButton = userForm.querySelector('button[type="submit"]');
+        if (submitButton) submitButton.disabled = false;
       }
     });
   }
 
   if (userTableBody) {
     userTableBody.addEventListener('click', async (event) => {
-      const button = event.target.closest('[data-credit-delta]');
-      if (!button) return;
-      const delta = Number(button.dataset.creditDelta);
-      if (!Number.isFinite(delta)) return;
-      const row = button.closest('tr');
-      const userId = row?.dataset.userId;
-      if (!userId) return;
+      const creditButton = event.target.closest('[data-credit-delta]');
+      if (creditButton) {
+        const delta = Number(creditButton.dataset.creditDelta);
+        if (!Number.isFinite(delta)) return;
+        const row = creditButton.closest('tr');
+        const userId = row?.dataset.userId;
+        if (!userId) return;
 
-      try {
-        button.disabled = true;
-        const res = await fetch(buildUrl(`/api/users/${encodeURIComponent(userId)}/credits`), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ delta }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok || data.success === false) {
-          throw new Error(data.error || 'Falha ao ajustar créditos.');
+        try {
+          creditButton.disabled = true;
+          const res = await fetch(buildUrl(`/api/users/${encodeURIComponent(userId)}/credits`), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ delta }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || data.success === false) {
+            throw new Error(data.error || 'Falha ao ajustar créditos.');
+          }
+
+          const creditEl = row.querySelector('[data-user-credits]');
+          if (creditEl) {
+            creditEl.textContent = data.user?.credits ?? '0';
+          }
+
+          row.classList.add('is-updated');
+          setTimeout(() => row.classList.remove('is-updated'), 800);
+          showToast('Créditos atualizados com sucesso.', 'success');
+        } catch (error) {
+          showToast(error.message || 'Erro ao ajustar créditos.', 'error');
+        } finally {
+          creditButton.disabled = false;
         }
+        return;
+      }
 
-        const creditEl = row.querySelector('[data-user-credits]');
-        if (creditEl) {
-          creditEl.textContent = data.user?.credits ?? '0';
+      const manageButton = event.target.closest('[data-user-manage]');
+      if (manageButton) {
+        const userId = manageButton.dataset.userManage;
+        const user = cachedUsers.find((item) => String(item.id) === String(userId));
+        if (user) {
+          populateUserEditor(user);
         }
-
-        row.classList.add('is-updated');
-        setTimeout(() => row.classList.remove('is-updated'), 800);
-        showToast('Créditos atualizados com sucesso.', 'success');
-      } catch (error) {
-        showToast(error.message || 'Erro ao ajustar créditos.', 'error');
-      } finally {
-        button.disabled = false;
       }
     });
   }
 
+  userEditorCloseButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+      closeEditor();
+    });
+  });
+
+  if (userEditorForm) {
+    userEditorForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const userId = userEditorForm.dataset.userId;
+      if (!userId) return;
+
+      const formData = new FormData(userEditorForm);
+      const payload = Object.fromEntries(formData.entries());
+      if (payload.credits !== undefined) {
+        payload.credits = Number(payload.credits);
+      }
+      if (!payload.password) {
+        delete payload.password;
+      }
+
+      try {
+        const res = await fetch(buildUrl(`/api/users/${encodeURIComponent(userId)}`), {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.success === false) {
+          throw new Error(data.error || 'Não foi possível atualizar o usuário.');
+        }
+        showToast('Usuário atualizado com sucesso.', 'success');
+        closeEditor();
+        refreshUsers();
+      } catch (error) {
+        showToast(error.message || 'Erro ao atualizar usuário.', 'error');
+      }
+    });
+  }
+
+  if (cachedQueue) {
+    renderQueue(cachedQueue);
+  } else {
+    refreshQueue();
+  }
   refreshStats();
   refreshUsers();
+  refreshWatchdog();
 })();

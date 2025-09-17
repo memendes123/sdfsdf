@@ -2,7 +2,9 @@ const express = require('express');
 const router = express.Router();
 
 const userStore = require('../services/userStore');
-const { autoRun, collectUsageStats } = require('../../src/util.cjs');
+const { collectUsageStats, describeApiError } = require('../../src/util.cjs');
+const rep4repApi = require('../../src/api.cjs');
+const runQueue = require('../../src/runQueue.cjs');
 
 function extractAuth(req) {
   const authHeader = req.header('authorization');
@@ -78,7 +80,6 @@ router.use(async (req, res, next) => {
     const user = await userStore.authenticateUser({ userId, token });
     if (!user) {
       return res.status(401).json({ success: false, error: 'Credenciais inválidas ou conta inativa.' });
-      return res.status(401).json({ success: false, error: 'Credenciais inválidas.' });
     }
     req.user = user;
     next();
@@ -124,11 +125,6 @@ router.patch('/me', async (req, res) => {
   }
 });
 
-      rep4repKey: user.rep4repKey,
-    },
-  });
-});
-
 router.post('/run', async (req, res) => {
   const { command = 'autoRun' } = req.body || {};
   const allowedCommands = new Set(['autoRun', 'stats']);
@@ -145,11 +141,13 @@ router.post('/run', async (req, res) => {
     }
   }
 
+  const isAdmin = req.user.role === 'admin';
+
   if (req.user.status !== 'active') {
     return res.status(403).json({ success: false, error: 'Conta ainda não ativada. Aguarde a liberação pelo administrador.' });
   }
 
-  if (req.user.credits <= 0) {
+  if (!isAdmin && req.user.credits <= 0) {
     return res.status(402).json({ success: false, error: 'Créditos insuficientes.' });
   }
 
@@ -157,40 +155,49 @@ router.post('/run', async (req, res) => {
     return res.status(400).json({ success: false, error: 'Defina a chave Rep4Rep antes de executar comandos.' });
   }
 
-  const creditLimit = req.user.credits;
-  let usedCredits = 0;
+  let remoteProfiles;
+  try {
+    remoteProfiles = await rep4repApi.getSteamProfiles({ token: req.user.rep4repKey });
+  } catch (error) {
+    return res.status(502).json({ success: false, error: describeApiError(error) });
+  }
+
+  if (!Array.isArray(remoteProfiles) || remoteProfiles.length === 0) {
+    return res.status(400).json({
+      success: false,
+      error: 'Nenhum perfil Rep4Rep encontrado. Adicione contas antes de executar o comando.',
+    });
+  }
 
   try {
-    const summary = await autoRun({
-      apiToken: req.user.rep4repKey,
-      onTaskComplete: () => {
-        usedCredits += 1;
-        if (usedCredits >= creditLimit) {
-          return false;
-        }
-        return true;
-      },
+    const enqueue = await runQueue.enqueueJob({
+      userId: req.user.id,
+      command: 'autoRun',
+      maxCommentsPerAccount: 1000,
+      accountLimit: 100,
     });
 
-    const consumed = Math.min(summary.totalComments ?? usedCredits, creditLimit);
-    let updatedUser = req.user;
-    if (consumed > 0) {
-      updatedUser = await userStore.consumeCredits(req.user.id, consumed);
-    }
-
+    const queueStatus = await runQueue.getUserQueueStatus(req.user.id);
     res.json({
       success: true,
-      message: 'Execução concluída.',
-      summary,
-      creditsConsumed: consumed,
-      remainingCredits: updatedUser.credits,
+      message: enqueue.alreadyQueued
+        ? 'Você já possui uma execução aguardando processamento. Acompanhe sua posição na fila.'
+        : 'Pedido adicionado à fila com sucesso. Aguarde a sua vez para começar.',
+      queue: queueStatus,
     });
   } catch (error) {
-    if (/Créditos insuficientes/.test(error.message)) {
-      return res.status(402).json({ success: false, error: error.message });
-    }
-    console.error('[API usuário] Falha ao executar comando:', error);
+    console.error('[API usuário] Falha ao enfileirar execução:', error);
     res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.get('/queue', async (req, res) => {
+  try {
+    const queueStatus = await runQueue.getUserQueueStatus(req.user.id);
+    res.json({ success: true, queue: queueStatus });
+  } catch (error) {
+    console.error('[API usuário] Falha ao consultar fila:', error);
+    res.status(500).json({ success: false, error: 'Não foi possível obter o status da fila.' });
   }
 });
 

@@ -130,6 +130,31 @@
                         <button type="button" class="btn btn--primary" data-run-button disabled>▶️ Rodar tarefas</button>
                     </div>
                     <pre class="client-output" data-run-output>Faça login e cadastre sua key para executar.</pre>
+                    <div class="client-queue" data-client-queue hidden>
+                        <div class="client-queue__header">
+                            <h3>Status da fila</h3>
+                            <button type="button" class="btn btn--ghost btn--small" data-client-queue-refresh>Atualizar</button>
+                        </div>
+                        <p class="client-queue__message" data-client-queue-message>Nenhuma ordem aguardando processamento.</p>
+                        <dl class="client-queue__stats">
+                            <div>
+                                <dt>Posição</dt>
+                                <dd data-client-queue-position>--</dd>
+                            </div>
+                            <div>
+                                <dt>Pedidos à frente</dt>
+                                <dd data-client-queue-ahead>--</dd>
+                            </div>
+                            <div>
+                                <dt>Início estimado</dt>
+                                <dd data-client-queue-estimate>--</dd>
+                            </div>
+                            <div>
+                                <dt>Pedidos na fila</dt>
+                                <dd data-client-queue-total>--</dd>
+                            </div>
+                        </dl>
+                    </div>
                 </article>
             </section>
         </main>

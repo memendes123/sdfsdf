@@ -17,6 +17,13 @@
   const logoutButton = document.querySelector('[data-logout]');
   const toastEl = document.querySelector('[data-client-toast]');
   const tabs = document.querySelectorAll('[data-tab]');
+  const queueCard = document.querySelector('[data-client-queue]');
+  const queueMessageEl = document.querySelector('[data-client-queue-message]');
+  const queuePositionEl = document.querySelector('[data-client-queue-position]');
+  const queueAheadEl = document.querySelector('[data-client-queue-ahead]');
+  const queueEstimateEl = document.querySelector('[data-client-queue-estimate]');
+  const queueTotalEl = document.querySelector('[data-client-queue-total]');
+  const queueRefreshButton = document.querySelector('[data-client-queue-refresh]');
 
   const storageKeys = {
     userId: 'rep4repUserId',
@@ -27,6 +34,7 @@
     userId: window.localStorage.getItem(storageKeys.userId) || null,
     token: window.localStorage.getItem(storageKeys.token) || null,
     user: null,
+    queue: null,
   };
 
   let toastTimeout = null;
@@ -82,6 +90,7 @@
     state.userId = null;
     state.token = null;
     state.user = null;
+    state.queue = null;
     window.localStorage.removeItem(storageKeys.userId);
     window.localStorage.removeItem(storageKeys.token);
     if (logoutButton) {
@@ -91,6 +100,9 @@
     if (dashboardSection) dashboardSection.classList.add('is-hidden');
     if (runOutput) {
       runOutput.textContent = 'Faça login e cadastre sua key para executar.';
+    }
+    if (queueCard) {
+      queueCard.hidden = true;
     }
   }
 
@@ -156,6 +168,7 @@
     if (dashboardSection) dashboardSection.classList.remove('is-hidden');
     if (logoutButton) logoutButton.hidden = false;
     refreshRunButton();
+    loadQueueStatus();
   }
 
   function refreshRunButton() {
@@ -179,6 +192,89 @@
       runButton.textContent = 'Informe a key primeiro';
     } else {
       runButton.textContent = '▶️ Rodar tarefas';
+    }
+
+    if (state.queue && state.queue.queued) {
+      runButton.disabled = true;
+      const position = Number(state.queue.position);
+      const label = Number.isFinite(position) ? `#${position}` : '#?';
+      runButton.textContent = `Em fila (${label})`;
+    }
+  }
+
+  function formatQueueWait(ms) {
+    const value = Number(ms);
+    if (!Number.isFinite(value) || value <= 0) {
+      return '--';
+    }
+    const minutes = Math.round(value / 60000);
+    if (minutes < 60) {
+      return `${minutes} min`;
+    }
+    const hours = minutes / 60;
+    return `${hours.toFixed(hours >= 10 ? 0 : 1)} h`;
+  }
+
+  function renderQueueStatus(queue) {
+    if (!queueCard) {
+      return;
+    }
+
+    if (queue && queue.queued) {
+      state.queue = queue;
+      queueCard.hidden = false;
+      const position = Number(queue.position);
+      const jobsAhead = Number(queue.jobsAhead);
+      if (queueMessageEl) {
+        if (queue.job && queue.job.status === 'running') {
+          queueMessageEl.textContent = 'Sua ordem está em execução.';
+        } else {
+          const aheadLabel = Number.isFinite(jobsAhead) ? jobsAhead : Math.max((Number.isFinite(position) ? position - 1 : 0), 0);
+          queueMessageEl.textContent = `Sua ordem está na posição ${Number.isFinite(position) ? position : '?'} com ${aheadLabel} pedido(s) antes.`;
+        }
+      }
+      if (queuePositionEl) {
+        queuePositionEl.textContent = Number.isFinite(position) ? position : '--';
+      }
+      if (queueAheadEl) {
+        queueAheadEl.textContent = Number.isFinite(jobsAhead)
+          ? jobsAhead
+          : Math.max((Number.isFinite(position) ? position - 1 : 0), 0);
+      }
+      if (queueEstimateEl) {
+        queueEstimateEl.textContent = queue.estimatedStartAt
+          ? new Date(queue.estimatedStartAt).toLocaleString()
+          : formatQueueWait(queue.estimatedWaitMs);
+      }
+      if (queueTotalEl) {
+        const total = Number(queue.queueLength);
+        queueTotalEl.textContent = Number.isFinite(total) ? total : '--';
+      }
+    } else {
+      state.queue = null;
+      if (queueMessageEl) {
+        queueMessageEl.textContent = 'Nenhuma ordem aguardando processamento.';
+      }
+      queueCard.hidden = true;
+    }
+
+    refreshRunButton();
+  }
+
+  async function loadQueueStatus() {
+    if (!state.userId || !state.token) {
+      renderQueueStatus(null);
+      return;
+    }
+    try {
+      const data = await apiFetch('/api/user/queue');
+      if (data?.queue) {
+        renderQueueStatus(data.queue);
+      } else {
+        renderQueueStatus(null);
+      }
+    } catch (error) {
+      console.warn('[Client] Falha ao consultar fila:', error);
     }
   }
 
@@ -294,40 +390,50 @@
         return;
       }
       runButton.disabled = true;
-      runOutput.textContent = 'Executando tarefas... aguarde o resumo.';
+      runOutput.textContent = 'Enviando pedido... aguarde a confirmação.';
       try {
         const data = await apiFetch('/api/user/run', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ command: 'autoRun' }),
         });
-        if (data?.summary) {
-          const perAccount = Array.isArray(data.summary.perAccount) ? data.summary.perAccount : [];
+        if (data?.queue) {
           const lines = [
-            data.message || 'Execução concluída.',
-            '',
-            `Total de comentários: ${data.summary.totalComments ?? 0}`,
-            `Créditos consumidos: ${data.creditsConsumed ?? 0}`,
-            `Créditos restantes: ${data.remainingCredits ?? state.user.credits}`,
+            data.message || 'Pedido enfileirado.',
           ];
-          perAccount.forEach((item) => {
-            const suffix = item.stoppedEarly ? ' (limite atingido)' : '';
-            lines.push(`- ${item.username || 'conta'}: ${item.comments ?? 0}${suffix}`);
-          });
+          const position = Number(data.queue.position);
+          const ahead = Number(data.queue.jobsAhead);
+          const total = Number(data.queue.queueLength);
+          lines.push(`Posição atual: ${Number.isFinite(position) ? position : '--'}`);
+          lines.push(`Pedidos à frente: ${Number.isFinite(ahead) ? ahead : Math.max((Number.isFinite(position) ? position - 1 : 0), 0)}`);
+          const estimate = data.queue.estimatedStartAt
+            ? new Date(data.queue.estimatedStartAt).toLocaleString()
+            : formatQueueWait(data.queue.estimatedWaitMs);
+          lines.push(`Estimativa para iniciar: ${estimate}`);
+          if (Number.isFinite(total)) {
+            lines.push(`Pedidos na fila: ${total}`);
+          }
           runOutput.textContent = lines.join('\n');
+          renderQueueStatus(data.queue);
         } else {
-          runOutput.textContent = data.message || 'Execução finalizada.';
+          runOutput.textContent = data.message || 'Pedido registrado.';
+          renderQueueStatus(null);
         }
-        const newCredits = Number.isFinite(data.remainingCredits) ? data.remainingCredits : state.user.credits;
-        updateDashboard({ ...state.user, credits: newCredits });
-        showToast('Execução concluída.');
+        showToast(data.message || 'Pedido enviado.');
       } catch (error) {
         runOutput.textContent = `❌ ${error.message}`;
         showToast(error.message || 'Falha ao executar.', 'error');
+        loadQueueStatus();
       } finally {
         runButton.disabled = false;
         refreshRunButton();
       }
+    });
+  }
+
+  if (queueRefreshButton) {
+    queueRefreshButton.addEventListener('click', () => {
+      loadQueueStatus();
     });
   }
 

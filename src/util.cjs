@@ -10,24 +10,52 @@ const db = require('./db.cjs');
 const api = require('./api.cjs');
 const { ApiError } = require('./api.cjs');
 const createSteamBot = require('./steamBot.cjs');
+const userStore = require('../web/services/userStore');
+const runQueue = require('./runQueue.cjs');
 
 const ROOT_DIR = path.join(__dirname, '..');
 const DATA_DIR = path.join(ROOT_DIR, 'data');
 const ACCOUNTS_PATH = path.join(ROOT_DIR, 'accounts.txt');
 const LOGS_DIR = path.join(ROOT_DIR, 'logs');
 const BACKUPS_DIR = path.join(ROOT_DIR, 'backups');
+const MAINTENANCE_STATE_FILE = path.join(DATA_DIR, 'maintenance-state.json');
 const EXPORTS_DIR = path.join(DATA_DIR, 'exports');
 
 const DEFAULT_LOGIN_DELAY = 30_000;
 const DEFAULT_COMMENT_DELAY = 15_000;
-const MAX_COMMENTS_PER_RUN = sanitizePositiveInteger(
+const configuredMaxComments = sanitizePositiveInteger(
   process.env.MAX_COMMENTS_PER_RUN ??
     process.env.COMMENT_LIMIT ??
     process.env.MAX_COMMENTS,
   10,
 );
+const MAX_COMMENTS_PER_RUN = Math.min(1000, configuredMaxComments);
+const KEEPALIVE_INTERVAL_MINUTES = Math.max(5, sanitizePositiveInteger(
+  process.env.KEEPALIVE_INTERVAL_MINUTES,
+  15,
+));
+const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+const BACKUP_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000;
 
 let rl = null;
+
+const maintenanceState = {
+  backupTimer: null,
+  initialized: false,
+  lastAutomaticBackup: null,
+};
+
+const keepAliveState = {
+  running: false,
+  stopRequested: false,
+  promise: null,
+  intervalMs: KEEPALIVE_INTERVAL_MINUTES * 60 * 1000,
+  lastRunAt: null,
+  startedAt: null,
+  lastError: null,
+  runs: 0,
+  ownerToken: null,
+};
 
 const statusMessage = {
   inactive: 0,
@@ -77,6 +105,96 @@ function logInvalidAccount(username, reason) {
   const timestamp = new Date().toLocaleTimeString();
   const line = `[${timestamp}] ${username} - ${reason}\n`;
   fs.appendFileSync(logFile, line);
+}
+
+function readMaintenanceMetadata() {
+  try {
+    const raw = fs.readFileSync(MAINTENANCE_STATE_FILE, 'utf8');
+    const data = JSON.parse(raw);
+    if (!data || typeof data !== 'object') {
+      return {};
+    }
+    return data;
+  } catch (error) {
+    return {};
+  }
+}
+
+function writeMaintenanceMetadata(data) {
+  try {
+    ensureDirectory(path.dirname(MAINTENANCE_STATE_FILE));
+    fs.writeFileSync(MAINTENANCE_STATE_FILE, JSON.stringify(data, null, 2));
+  } catch (error) {
+    log(`⚠️ Não foi possível salvar metadados de manutenção: ${error.message}`);
+  }
+}
+
+function getLatestBackupTimestamp() {
+  if (!fs.existsSync(BACKUPS_DIR)) {
+    return 0;
+  }
+
+  const files = fs
+    .readdirSync(BACKUPS_DIR)
+    .filter((file) => file.toLowerCase().endsWith('.sqlite'));
+
+  let latest = 0;
+  for (const file of files) {
+    try {
+      const stats = fs.statSync(path.join(BACKUPS_DIR, file));
+      latest = Math.max(latest, stats.mtimeMs, stats.ctimeMs ?? 0);
+    } catch (error) {
+      log(`⚠️ Não foi possível ler data do backup ${file}: ${error.message}`);
+    }
+  }
+  return latest;
+}
+
+async function ensureAutomaticBackup() {
+  const metadata = readMaintenanceMetadata();
+  const recorded = metadata.lastAutomaticBackup
+    ? new Date(metadata.lastAutomaticBackup).getTime()
+    : 0;
+  const latestFile = getLatestBackupTimestamp();
+  const lastBackup = Math.max(recorded || 0, latestFile || 0);
+  const now = Date.now();
+
+  if (lastBackup && now - lastBackup < THREE_DAYS_MS) {
+    return null;
+  }
+
+  log('🗂️ Executando backup automático programado...');
+  const filePath = await backupDatabase();
+  if (filePath) {
+    metadata.lastAutomaticBackup = new Date().toISOString();
+    writeMaintenanceMetadata(metadata);
+    maintenanceState.lastAutomaticBackup = metadata.lastAutomaticBackup;
+  }
+  return filePath;
+}
+
+function scheduleAutomaticBackups() {
+  if (maintenanceState.initialized) {
+    return;
+  }
+  maintenanceState.initialized = true;
+
+  ensureDirectory(path.dirname(MAINTENANCE_STATE_FILE));
+  const metadata = readMaintenanceMetadata();
+  if (metadata.lastAutomaticBackup) {
+    maintenanceState.lastAutomaticBackup = metadata.lastAutomaticBackup;
+  }
+
+  const run = () => {
+    ensureAutomaticBackup().catch((error) => {
+      log(`⚠️ Backup automático falhou: ${error.message}`);
+    });
+  };
+
+  // Executa verificação logo no início, mas sem bloquear a inicialização.
+  setTimeout(run, 5_000);
+
+  maintenanceState.backupTimer = setInterval(run, BACKUP_CHECK_INTERVAL_MS);
 }
 
 function removeFromAccountsFile(username) {
@@ -291,6 +409,37 @@ async function removeFromRep4Rep(steamId, options = {}) {
   }
 }
 
+function extractSteamIdsFromSummary(summary) {
+  if (!summary || !Array.isArray(summary.perAccount)) {
+    return [];
+  }
+
+  const ids = summary.perAccount
+    .map((item) => (item && item.steamId ? String(item.steamId) : null))
+    .filter(Boolean);
+  return [...new Set(ids)];
+}
+
+async function removeRemoteProfiles(summary, options = {}) {
+  const { apiClient = api, apiToken = null } = options;
+  const steamIds = extractSteamIdsFromSummary(summary);
+  if (!steamIds.length) {
+    return { attempted: 0, removed: 0 };
+  }
+
+  let removed = 0;
+  for (const steamId of steamIds) {
+    try {
+      await apiClient.removeSteamProfile(steamId, { token: apiToken });
+      removed += 1;
+    } catch (error) {
+      log(`[Rep4Rep] Falha ao remover ${steamId} após execução: ${describeApiError(error)}`);
+    }
+  }
+
+  return { attempted: steamIds.length, removed };
+}
+
 async function showAllProfiles() {
   const profiles = await db.getAllProfiles();
   if (!profiles.length) {
@@ -317,12 +466,21 @@ async function addProfilesFromFile(options = {}) {
     return { added: 0, total: 0 };
   }
 
+  const limit = Number.isFinite(options.limitAccounts)
+    ? Math.max(1, Math.floor(options.limitAccounts))
+    : null;
+  const selectedAccounts = limit ? accounts.slice(0, limit) : accounts;
+  if (!selectedAccounts.length) {
+    log('Nenhuma conta disponível após aplicar o limite configurado.');
+    return { added: 0, total: 0 };
+  }
+
   const existingProfiles = await db.getAllProfiles();
   const knownUsers = new Set(existingProfiles.map((profile) => profile.username));
 
   let added = 0;
 
-  for (const line of accounts) {
+  for (const line of selectedAccounts) {
     let account;
     try {
       account = parseAccountLine(line);
@@ -374,12 +532,46 @@ async function addProfilesFromFile(options = {}) {
   }
 
   log(`Processo concluído. ${added} novo(s) perfil(is) adicionados.`);
-  return { added, total: accounts.length };
+  return { added, total: selectedAccounts.length };
 }
 
 async function addProfilesAndRun(options = {}) {
   await addProfilesFromFile(options);
   return autoRun(options);
+}
+
+async function runFullCycle(options = {}) {
+  const maxAccounts = Number.isFinite(options.maxAccounts)
+    ? Math.min(100, Math.max(1, Math.floor(options.maxAccounts)))
+    : 100;
+  const maxComments = Math.min(
+    1000,
+    Math.max(1, options.maxCommentsPerAccount ?? MAX_COMMENTS_PER_RUN),
+  );
+  const apiClient = options.apiClient || api;
+  const apiToken = options.apiToken ?? null;
+
+  log(
+    `Iniciando fluxo completo com até ${maxAccounts} contas e ${maxComments} comentários por conta.`,
+  );
+
+  const addResult = await addProfilesFromFile({
+    ...options,
+    limitAccounts: maxAccounts,
+    apiClient,
+    apiToken,
+  });
+
+  const summary = await autoRun({
+    ...options,
+    apiClient,
+    apiToken,
+    maxCommentsPerAccount: maxComments,
+    accountLimit: maxAccounts,
+  });
+
+  const cleanup = await removeRemoteProfiles(summary, { apiClient, apiToken });
+  return { addResult, summary, cleanup };
 }
 
 function resolveRemoteProfileId(remoteProfile) {
@@ -492,11 +684,20 @@ async function autoRun(options = {}) {
     loginDelay = sanitizeDelay(process.env.LOGIN_DELAY, DEFAULT_LOGIN_DELAY),
     onTaskComplete,
     filterProfiles,
+    accountLimit = null,
+    onFinish,
   } = options;
 
   const accounts = readAccountsFile();
   if (!accounts.length) {
     log('Nenhuma conta configurada no accounts.txt. Adicione contas antes de executar o autoRun.', true);
+    return { totalComments: 0, perAccount: [] };
+  }
+
+  const limit = Number.isFinite(accountLimit) ? Math.max(1, Math.floor(accountLimit)) : null;
+  const selectedAccounts = limit ? accounts.slice(0, limit) : accounts;
+  if (!selectedAccounts.length) {
+    log('Nenhuma conta disponível para execução após aplicar o limite configurado.', true);
     return { totalComments: 0, perAccount: [] };
   }
 
@@ -524,7 +725,7 @@ async function autoRun(options = {}) {
   const remoteMap = new Map(remoteProfiles.map((remote) => [String(remote.steamId), remote]));
   const summary = { totalComments: 0, perAccount: [] };
 
-  for (const [index, accountLine] of accounts.entries()) {
+  for (const [index, accountLine] of selectedAccounts.entries()) {
     let account;
     try {
       account = parseAccountLine(accountLine);
@@ -636,12 +837,19 @@ async function autoRun(options = {}) {
       break;
     }
 
-    if (index < accounts.length - 1) {
+    if (index < selectedAccounts.length - 1) {
       await sleep(loginDelay);
     }
   }
 
   log(`✅ autoRun concluído. Total de comentários enviados: ${summary.totalComments}`);
+  if (typeof onFinish === 'function') {
+    try {
+      await onFinish(summary);
+    } catch (error) {
+      log(`⚠️ Callback onFinish falhou: ${error.message}`);
+    }
+  }
   return summary;
 }
 
@@ -698,6 +906,306 @@ async function removeProfile(username, options = {}) {
   await db.removeProfile(user);
   removeFromAccountsFile(user);
   log(`[${user}] Removido do sistema.`);
+}
+
+async function prioritizedAutoRun(options = {}) {
+  const {
+    ownerToken = process.env.REP4REP_KEY ?? null,
+    maxCommentsPerAccount = MAX_COMMENTS_PER_RUN,
+    accountLimit = 100,
+    clientFilter,
+    onClientProcessed,
+    ...runOverrides
+  } = options;
+
+  const maxComments = Math.min(1000, Math.max(1, maxCommentsPerAccount));
+  const baseRunOptions = {
+    ...runOverrides,
+    maxCommentsPerAccount: maxComments,
+    accountLimit,
+  };
+
+  const result = { owner: null, clients: [] };
+
+  if (ownerToken) {
+    log('🚀 Executando lote prioritário do proprietário...');
+    try {
+      const summary = await autoRun({ ...baseRunOptions, apiToken: ownerToken });
+      result.owner = summary;
+      if (summary.totalComments > 0) {
+        log('Pedidos do proprietário atendidos. Clientes serão processados posteriormente.');
+        return result;
+      }
+    } catch (error) {
+      log(`❌ Falha ao executar autoRun prioritário: ${error.message}`);
+    }
+  } else {
+    log('⚠️ Nenhum token do proprietário configurado. Pulando etapa prioritária.');
+  }
+
+  let processedJobs = 0;
+
+  while (true) {
+    const job = await runQueue.takeNextPendingJob();
+    if (!job) {
+      break;
+    }
+
+    const client = job.user || (await userStore.getUser(job.userId));
+    if (!client) {
+      await runQueue.failJob(job.id, 'Usuário não encontrado.');
+      log(`❌ Pedido ${job.id} removido da fila: usuário inexistente.`);
+      continue;
+    }
+
+    if (typeof clientFilter === 'function' && !clientFilter(client)) {
+      await runQueue.failJob(job.id, 'Pedido bloqueado pelo filtro do operador.');
+      log(`⚠️ Pedido ${job.id} ignorado (filtro do operador).`);
+      continue;
+    }
+
+    if (client.status !== 'active') {
+      await runQueue.failJob(job.id, 'Conta inativa ou bloqueada.');
+      log(`⚠️ ${client.username || client.id} ignorado: conta não está ativa.`);
+      continue;
+    }
+
+    if (!client.rep4repKey) {
+      await runQueue.failJob(job.id, 'Chave Rep4Rep não configurada.');
+      log(`⚠️ ${client.username || client.id} ignorado: key Rep4Rep ausente.`);
+      continue;
+    }
+
+    const isAdmin = client.role === 'admin';
+    const creditLimit = isAdmin ? Infinity : Number(client.credits) || 0;
+    if (!isAdmin && creditLimit <= 0) {
+      await runQueue.failJob(job.id, 'Créditos insuficientes.');
+      log(`⚠️ ${client.username || client.id} sem créditos suficientes. Pedido removido.`);
+      continue;
+    }
+
+    const jobMaxComments = Math.min(1000, Math.max(1, job.maxCommentsPerAccount || maxComments));
+    const jobAccountLimit = Math.min(100, Math.max(1, job.accountLimit || accountLimit));
+    let usedCredits = 0;
+
+    log(
+      `🧾 Processando pedido da fila (${client.username || client.fullName || client.id}) ` +
+        `(máx ${jobAccountLimit} contas / ${jobMaxComments} comentários).`,
+    );
+
+    try {
+      const summary = await autoRun({
+        ...baseRunOptions,
+        apiToken: client.rep4repKey,
+        maxCommentsPerAccount: jobMaxComments,
+        accountLimit: jobAccountLimit,
+        onTaskComplete: () => {
+          if (isAdmin) {
+            return true;
+          }
+          usedCredits += 1;
+          return usedCredits < creditLimit;
+        },
+      });
+
+      const consumed = isAdmin
+        ? 0
+        : Math.min(summary.totalComments ?? usedCredits, creditLimit);
+
+      if (!isAdmin && consumed > 0) {
+        try {
+          await userStore.consumeCredits(client.id, consumed);
+        } catch (creditError) {
+          log(`⚠️ Falha ao debitar créditos de ${client.username}: ${creditError.message}`);
+        }
+      }
+
+      const cleanup = await removeRemoteProfiles(summary, {
+        apiToken: client.rep4repKey,
+        apiClient: baseRunOptions.apiClient || api,
+      });
+
+      await runQueue.completeJob(job.id, {
+        summary,
+        cleanup,
+        creditsConsumed: consumed,
+        totalComments: summary.totalComments ?? 0,
+      });
+
+      const clientResult = {
+        client,
+        summary,
+        creditsConsumed: consumed,
+        cleanup,
+        queueJob: { id: job.id },
+      };
+      result.clients.push(clientResult);
+      processedJobs += 1;
+
+      if (typeof onClientProcessed === 'function') {
+        try {
+          await onClientProcessed(clientResult);
+        } catch (callbackError) {
+          log(`⚠️ onClientProcessed falhou: ${callbackError.message}`);
+        }
+      }
+
+      if (summary.totalComments > 0) {
+        log(`✅ Execução concluída para ${client.username || client.id}.`);
+      } else {
+        log(`ℹ️ Nenhum comentário pendente para ${client.username || client.id}.`);
+      }
+    } catch (error) {
+      await runQueue.failJob(job.id, error.message);
+      log(`❌ Falha ao processar ${client.username || client.id}: ${error.message}`);
+      result.clients.push({ client, error: error.message, queueJob: { id: job.id } });
+    }
+  }
+
+  if (processedJobs === 0) {
+    log('Nenhuma ordem na fila de clientes neste ciclo.');
+  }
+
+  try {
+    await runQueue.clearCompleted({ maxEntries: 200 });
+  } catch (cleanupError) {
+    log(`⚠️ Falha ao limpar histórico da fila: ${cleanupError.message}`);
+  }
+
+  return result;
+}
+
+async function waitWithAbort(totalMs, state = keepAliveState) {
+  let remaining = Math.max(0, Number(totalMs) || 0);
+  const step = Math.min(60_000, Math.max(1_000, remaining));
+  while (!state.stopRequested && remaining > 0) {
+    const chunk = Math.min(step, remaining);
+    await sleep(chunk);
+    remaining -= chunk;
+  }
+}
+
+async function startKeepAliveLoop(options = {}) {
+  if (keepAliveState.running) {
+    return { alreadyRunning: true, status: getKeepAliveStatus() };
+  }
+
+  const intervalMinutes = Math.max(
+    5,
+    sanitizePositiveInteger(options.intervalMinutes, KEEPALIVE_INTERVAL_MINUTES),
+  );
+  keepAliveState.intervalMs = intervalMinutes * 60 * 1000;
+  keepAliveState.stopRequested = false;
+  keepAliveState.running = true;
+  keepAliveState.startedAt = new Date().toISOString();
+  keepAliveState.lastError = null;
+  keepAliveState.runs = 0;
+  keepAliveState.ownerToken = options.ownerToken || process.env.REP4REP_KEY || null;
+
+  const runOptions = {
+    accountLimit: 100,
+    maxCommentsPerAccount: MAX_COMMENTS_PER_RUN,
+    ...options.runOptions,
+  };
+
+  const loop = async () => {
+    while (!keepAliveState.stopRequested) {
+      try {
+        const summary = await prioritizedAutoRun({
+          ...runOptions,
+          ownerToken: keepAliveState.ownerToken || runOptions.ownerToken,
+        });
+        keepAliveState.lastRunAt = new Date().toISOString();
+        keepAliveState.runs += 1;
+        keepAliveState.lastError = null;
+        const ownerComments = summary?.owner?.totalComments ?? 0;
+        const clientTotals = Array.isArray(summary?.clients)
+          ? summary.clients.reduce((acc, item) => acc + (item?.summary?.totalComments ?? 0), 0)
+          : 0;
+        keepAliveState.lastSummary = {
+          ownerComments,
+          clientComments: clientTotals,
+          processedClients: Array.isArray(summary?.clients) ? summary.clients.length : 0,
+          timestamp: keepAliveState.lastRunAt,
+        };
+      } catch (error) {
+        keepAliveState.lastRunAt = new Date().toISOString();
+        keepAliveState.lastError = error.message;
+        log(`⚠️ Vigia automático falhou: ${error.message}`);
+      }
+
+      if (keepAliveState.stopRequested) {
+        break;
+      }
+
+      await waitWithAbort(keepAliveState.intervalMs);
+    }
+
+    keepAliveState.running = false;
+    keepAliveState.promise = null;
+  };
+
+  keepAliveState.promise = loop();
+  return { started: true, status: getKeepAliveStatus() };
+}
+
+async function stopKeepAliveLoop() {
+  if (!keepAliveState.running) {
+    return { stopped: false, status: getKeepAliveStatus() };
+  }
+
+  keepAliveState.stopRequested = true;
+  if (keepAliveState.promise) {
+    try {
+      await keepAliveState.promise;
+    } catch (error) {
+      log(`⚠️ Erro ao encerrar vigia: ${error.message}`);
+    }
+  }
+
+  keepAliveState.running = false;
+  keepAliveState.promise = null;
+  return { stopped: true, status: getKeepAliveStatus() };
+}
+
+function getKeepAliveStatus() {
+  return {
+    running: keepAliveState.running,
+    intervalMinutes: Math.round((keepAliveState.intervalMs / 60_000) * 10) / 10,
+    startedAt: keepAliveState.startedAt,
+    lastRunAt: keepAliveState.lastRunAt,
+    runs: keepAliveState.runs,
+    lastError: keepAliveState.lastError,
+    ownerTokenDefined: Boolean(keepAliveState.ownerToken),
+  };
+}
+
+async function keepBotAliveInteractive(options = {}) {
+  const { alreadyRunning } = await startKeepAliveLoop(options);
+  if (alreadyRunning) {
+    log('⚠️ O modo vigia já está ativo em segundo plano.');
+    return getKeepAliveStatus();
+  }
+
+  log(
+    `🛡️ Modo vigia ativo. Executando prioridade a cada ${Math.round(
+      keepAliveState.intervalMs / 60_000,
+    )} minuto(s). Pressione Ctrl+C para encerrar.`,
+  );
+
+  return new Promise((resolve) => {
+    const finish = async () => {
+      log('⏹️ Encerrando modo vigia. Aguardando ciclo atual...');
+      await stopKeepAliveLoop();
+      process.off('SIGINT', finish);
+      process.off('SIGTERM', finish);
+      log('✅ Modo vigia encerrado.');
+      resolve(getKeepAliveStatus());
+    };
+
+    process.once('SIGINT', finish);
+    process.once('SIGTERM', finish);
+  });
 }
 
 async function checkAndSyncProfiles(options = {}) {
@@ -938,6 +1446,7 @@ module.exports = {
   logInvalidAccount,
   removeFromAccountsFile,
   removeFromRep4Rep,
+  removeRemoteProfiles,
   loginWithRetries,
   statusMessage,
   showAllProfiles,
@@ -947,6 +1456,8 @@ module.exports = {
   autoRun,
   addProfilesFromFile,
   addProfilesAndRun,
+  runFullCycle,
+  prioritizedAutoRun,
   checkAndSyncProfiles,
   checkCommentAvailability,
   verifyProfileStatus,
@@ -956,6 +1467,11 @@ module.exports = {
   collectUsageStats,
   resetProfileCookies,
   backupDatabase,
+  scheduleAutomaticBackups,
+  startKeepAliveLoop,
+  stopKeepAliveLoop,
+  getKeepAliveStatus,
+  keepBotAliveInteractive,
   describeApiError,
   readAccountsFile,
   parseStoredCookies,
