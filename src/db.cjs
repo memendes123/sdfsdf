@@ -303,6 +303,21 @@ class DbWrapper extends EventEmitter {
       }
 
       await this.checkpoint('PASSIVE');
+      const result = await this.db.run(`
+        INSERT INTO steamprofile (username, password, sharedSecret, steamId, cookies)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(steamId) DO UPDATE SET
+          username = excluded.username,
+          password = excluded.password,
+          sharedSecret = excluded.sharedSecret,
+          cookies = excluded.cookies
+      `, [username, password, sharedSecret || null, steamId, serializedCookies]);
+
+      console.log(`✅ Perfil ${username} adicionado/atualizado.`);
+      if (result?.changes > 0) {
+        const type = existingProfile ? 'profile.update' : 'profile.insert';
+        this._emitChange({ type, username, steamId: steamId || existingProfile?.steamId || null });
+      }
       return result;
     } catch (err) {
       console.error("❌ Erro ao adicionar/atualizar perfil:", err.message);

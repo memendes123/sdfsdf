@@ -95,6 +95,11 @@
       }
     });
 
+    const bannerFrame = document.querySelector('.goog-te-banner-frame.skiptranslate');
+    if (bannerFrame && bannerFrame.parentNode) {
+      bannerFrame.parentNode.removeChild(bannerFrame);
+    }
+
     const skipElements = document.querySelectorAll('html.skiptranslate, body.skiptranslate');
     skipElements.forEach((element) => {
       element.classList.remove('skiptranslate');
@@ -121,6 +126,9 @@
   }
 
   const artifactCleanupDelays = [0, 120, 400, 1200, 2400];
+  }
+
+  const artifactCleanupDelays = [0, 120, 400];
   function scheduleArtifactCleanup() {
     artifactCleanupDelays.forEach((delay) => {
       window.setTimeout(cleanGoogleArtifacts, delay);
