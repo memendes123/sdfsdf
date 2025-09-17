@@ -303,6 +303,14 @@ class DbWrapper extends EventEmitter {
       }
 
       await this.checkpoint('PASSIVE');
+
+      console.log(`✅ Perfil ${username} adicionado/atualizado.`);
+      if (result?.changes > 0) {
+        const steamRef = steamId || existingProfile?.steamId || null;
+        this._emitChange({ type: changeType, username, steamId: steamRef });
+      }
+
+      await this.checkpoint('PASSIVE');
       const result = await this.db.run(`
         INSERT INTO steamprofile (username, password, sharedSecret, steamId, cookies)
         VALUES (?, ?, ?, ?, ?)
@@ -327,12 +335,12 @@ class DbWrapper extends EventEmitter {
 
   async removeProfile(username) {
     await this._ensureReady();
-    const result = await this.db.run(
+    const removalResult = await this.db.run(
       `DELETE FROM steamprofile WHERE username = ?`,
       [username]
     );
 
-    if (result.changes > 0) {
+    if (removalResult.changes > 0) {
       console.log(`🗑️ Perfil '${username}' removido.`);
       this._emitChange({ type: 'profile.remove', username });
       await this.checkpoint('PASSIVE');
@@ -340,7 +348,7 @@ class DbWrapper extends EventEmitter {
       console.log(`⚠️ Nenhum perfil encontrado com username '${username}'.`);
     }
 
-    return result;
+    return removalResult;
   }
 
   async getAllProfiles() {
@@ -363,13 +371,13 @@ class DbWrapper extends EventEmitter {
 
   async getCommentsInLast24Hours(steamId) {
     await this._ensureReady();
-    const result = await this.db.get(`
+    const commentCountRow = await this.db.get(`
       SELECT COUNT(*) as count
       FROM comments
       WHERE steamId = ? AND timestamp >= DATETIME('now', '-24 hours')
     `, [steamId]);
 
-    return result?.count || 0;
+    return commentCountRow?.count || 0;
   }
 
   async updateCookies(username, cookies) {

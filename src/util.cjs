@@ -1357,6 +1357,11 @@ async function prioritizedAutoRun(options = {}) {
       );
     }
 
+    const allowEnvFallback = client?.role && client.role !== 'customer';
+    const jobApiToken = resolveApiToken(client.rep4repKey, {
+      fallbackToEnv: Boolean(allowEnvFallback),
+    });
+    if (!jobApiToken) {
     const clientToken = resolveApiToken(client.rep4repKey, {
       fallbackToEnv: client.role === 'admin',
     });
@@ -1414,6 +1419,7 @@ async function prioritizedAutoRun(options = {}) {
     try {
       const summary = await autoRun({
         ...baseRunOptions,
+        apiToken: jobApiToken,
         apiToken: clientToken,
         maxCommentsPerAccount: jobMaxComments,
         accountLimit: jobAccountLimit,
@@ -1443,6 +1449,7 @@ async function prioritizedAutoRun(options = {}) {
       }
 
       const cleanup = await removeRemoteProfiles(summary, {
+        apiToken: jobApiToken,
         apiToken: clientToken,
         apiClient: baseRunOptions.apiClient || api,
       });
