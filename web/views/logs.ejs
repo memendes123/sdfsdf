@@ -1,4 +1,5 @@
-<%- include('partials/layout-start', { title: title || 'Logs', page }) %>
+<% const panelBase = typeof baseUrl === 'string' && baseUrl ? baseUrl : ''; %>
+<%- include('partials/layout-start', { title: title || 'Logs', page, panelBase }) %>
 <section class="card card--full">
     <header class="card__header">
         <div>
@@ -24,19 +25,4 @@
         <% } %>
     </div>
 </section>
-<%- include('partials/layout-end', { includePanelScript: false }) %>
-<!DOCTYPE html>
-<html>
-<head><title>Logs</title></head>
-<body>
-<h2>📜 Logs</h2>
-<% if (!logs.length) { %>
-    <p>Nenhum log encontrado.</p>
-<% } else { %>
-    <% logs.forEach(log => { %>
-        <h3><%= log.name %></h3>
-        <pre><%= log.content %></pre>
-    <% }) %>
-<% } %>
-</body>
-</html>
+<%- include('partials/layout-end', { includePanelScript: false, panelBase }) %>

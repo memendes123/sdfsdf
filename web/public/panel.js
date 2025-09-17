@@ -1,5 +1,8 @@
 (function () {
-  const panelBase = window.__PANEL_BASE__ || '';
+  const fallbackBase = typeof window !== 'undefined' && window.location?.pathname?.startsWith('/admin')
+    ? '/admin'
+    : '';
+  const panelBase = window.__PANEL_BASE__ || fallbackBase || '';
   const buildUrl = (path) => `${panelBase}${path}`;
 
   const outputEl = document.querySelector('[data-command-output]');
