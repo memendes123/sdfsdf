@@ -909,6 +909,7 @@ async function removeProfile(username, options = {}) {
   log(`[${user}] Removido do sistema.`);
 }
 
+
 async function prioritizedAutoRun(options = {}) {
   const {
     ownerToken = process.env.REP4REP_KEY ?? null,
@@ -947,7 +948,14 @@ async function prioritizedAutoRun(options = {}) {
   let processedJobs = 0;
 
   while (true) {
-    const job = await runQueue.takeNextPendingJob();
+    let job;
+    try {
+      job = await runQueue.takeNextPendingJob();
+    } catch (error) {
+      log(`❌ Falha ao obter próxima ordem da fila: ${error.message}`);
+      break;
+    }
+
     if (!job) {
       break;
     }
@@ -987,68 +995,51 @@ async function prioritizedAutoRun(options = {}) {
 
     const jobMaxComments = Math.min(1000, Math.max(1, job.maxCommentsPerAccount || maxComments));
     const jobAccountLimit = Math.min(100, Math.max(1, job.accountLimit || accountLimit));
+
     let usedCredits = 0;
+    const upstreamTaskHandler = baseRunOptions.onTaskComplete;
+    const onTaskComplete = async (payload) => {
+      if (typeof upstreamTaskHandler === 'function') {
+        try {
+          const upstreamResult = await upstreamTaskHandler(payload);
+          if (upstreamResult === false) {
+            return false;
+          }
+        } catch (callbackError) {
+          log(`⚠️ onTaskComplete custom handler falhou: ${callbackError.message}`);
+        }
+      }
+
+      if (isAdmin) {
+        return true;
+      }
+
+      usedCredits += 1;
+      return usedCredits < creditLimit;
+    };
 
     log(
       `🧾 Processando pedido da fila (${client.username || client.fullName || client.id}) ` +
         `(máx ${jobAccountLimit} contas / ${jobMaxComments} comentários).`,
     );
 
-  let users = [];
-  try {
-    users = await userStore.listUsers();
-  } catch (error) {
-    log(`❌ Falha ao carregar usuários para fila de clientes: ${error.message}`);
-    return result;
-  }
-
-  const eligibleClients = users.filter((user) => {
-    if (typeof clientFilter === 'function' && !clientFilter(user)) {
-      return false;
-    }
-    if (!user.rep4repKey) {
-      return false;
-    }
-    if (user.status !== 'active') {
-      return false;
-    }
-    if (user.role === 'admin') {
-      return true;
-    }
-    return user.credits > 0;
-  });
-
-  for (const client of eligibleClients) {
-    const isAdmin = client.role === 'admin';
-    const creditLimit = isAdmin ? Infinity : client.credits;
-    let usedCredits = 0;
-
-    log(`🧾 Processando cliente ${client.username} (${client.id}).`);
     try {
       const summary = await autoRun({
         ...baseRunOptions,
         apiToken: client.rep4repKey,
         maxCommentsPerAccount: jobMaxComments,
         accountLimit: jobAccountLimit,
-        onTaskComplete: () => {
-          if (isAdmin) {
-            return true;
-          }
-          usedCredits += 1;
-          return usedCredits < creditLimit;
-        },
+        onTaskComplete,
       });
 
-      const consumed = isAdmin
-        ? 0
-        ? summary.totalComments
-        : Math.min(summary.totalComments ?? usedCredits, creditLimit);
+      const totalComments = summary?.totalComments ?? 0;
+      const consumed = isAdmin ? 0 : Math.min(creditLimit, usedCredits, totalComments);
 
       if (!isAdmin && consumed > 0) {
         try {
           await userStore.consumeCredits(client.id, consumed);
         } catch (creditError) {
-          log(`⚠️ Falha ao debitar créditos de ${client.username}: ${creditError.message}`);
+          log(`⚠️ Falha ao debitar créditos de ${client.username || client.id}: ${creditError.message}`);
         }
       }
 
@@ -1061,7 +1052,7 @@ async function prioritizedAutoRun(options = {}) {
         summary,
         cleanup,
         creditsConsumed: consumed,
-        totalComments: summary.totalComments ?? 0,
+        totalComments,
       });
 
       const clientResult = {
@@ -1074,8 +1065,6 @@ async function prioritizedAutoRun(options = {}) {
       result.clients.push(clientResult);
       processedJobs += 1;
 
-      const clientResult = { client, summary, creditsConsumed: isAdmin ? 0 : consumed, cleanup };
-      result.clients.push(clientResult);
       if (typeof onClientProcessed === 'function') {
         try {
           await onClientProcessed(clientResult);
@@ -1084,7 +1073,7 @@ async function prioritizedAutoRun(options = {}) {
         }
       }
 
-      if (summary.totalComments > 0) {
+      if (totalComments > 0) {
         log(`✅ Execução concluída para ${client.username || client.id}.`);
       } else {
         log(`ℹ️ Nenhum comentário pendente para ${client.username || client.id}.`);
@@ -1104,12 +1093,6 @@ async function prioritizedAutoRun(options = {}) {
     await runQueue.clearCompleted({ maxEntries: 200 });
   } catch (cleanupError) {
     log(`⚠️ Falha ao limpar histórico da fila: ${cleanupError.message}`);
-        log(`✅ Execução concluída para ${client.username}.`);
-        break;
-      }
-    } catch (error) {
-      log(`❌ Falha ao processar ${client.username}: ${error.message}`);
-    }
   }
 
   if (!result.clients.length) {
@@ -1118,6 +1101,7 @@ async function prioritizedAutoRun(options = {}) {
 
   return result;
 }
+
 
 async function waitWithAbort(totalMs, state = keepAliveState) {
   let remaining = Math.max(0, Number(totalMs) || 0);
@@ -1170,8 +1154,7 @@ async function startKeepAliveLoop(options = {}) {
           ownerComments,
           clientComments: clientTotals,
           processedClients: Array.isArray(summary?.clients) ? summary.clients.length : 0,
-        keepAliveState.lastSummary = {
-          totalComments: summary?.owner?.totalComments ?? summary?.totalComments ?? 0,
+          totalComments: ownerComments + clientTotals,
           timestamp: keepAliveState.lastRunAt,
         };
       } catch (error) {
