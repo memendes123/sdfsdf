@@ -1,6 +1,5 @@
 const express = require('express');
 const router = express.Router();
-const basicAuth = require('basic-auth');
 const fs = require('fs');
 const path = require('path');
 
@@ -23,8 +22,46 @@ userStore.ensureDataFile().catch((error) => {
   console.error('[Painel] Falha ao preparar storage de usuários:', error);
 });
 
+function extractBasicAuth(req) {
+  const header = req.headers?.authorization;
+  if (!header || typeof header !== 'string') {
+    return null;
+  }
+
+  const prefix = 'basic ';
+  if (!header.toLowerCase().startsWith(prefix)) {
+    return null;
+  }
+
+  const base64Credentials = header.slice(prefix.length).trim();
+  if (!base64Credentials) {
+    return null;
+  }
+
+  let decoded;
+  try {
+    decoded = Buffer.from(base64Credentials, 'base64').toString();
+  } catch (error) {
+    console.warn('[Painel] Cabeçalho Basic Auth inválido recebido:', error.message);
+    return null;
+  }
+
+  const separatorIndex = decoded.indexOf(':');
+  if (separatorIndex === -1) {
+    return null;
+  }
+
+  const name = decoded.slice(0, separatorIndex);
+  const pass = decoded.slice(separatorIndex + 1);
+
+  return {
+    name,
+    pass,
+  };
+}
+
 router.use((req, res, next) => {
-  const user = basicAuth(req);
+  const user = extractBasicAuth(req);
   if (!auth(user)) {
     res.set('WWW-Authenticate', 'Basic realm="Painel Rep4Rep"');
     return res.status(401).send('Auth required.');
