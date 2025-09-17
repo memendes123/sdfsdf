@@ -20,6 +20,16 @@
   const userEditorForm = document.querySelector('[data-user-editor-form]');
   const userEditorCloseButtons = document.querySelectorAll('[data-user-editor-close]');
   const userEditorTitle = document.querySelector('[data-user-editor-title]');
+  const queueLengthEl = document.querySelector('[data-queue-length]');
+  const queueAverageEl = document.querySelector('[data-queue-average]');
+  const queueBody = document.querySelector('[data-queue-body]');
+  const queueHistoryContainer = document.querySelector('[data-queue-history-container]');
+  const queueHistoryList = document.querySelector('[data-queue-history]');
+  const queueRefreshButton = document.querySelector('[data-queue-refresh]');
+
+  let toastTimeout = null;
+  let cachedUsers = [];
+  let cachedQueue = window.__INITIAL_QUEUE__ || null;
 
   let toastTimeout = null;
   let cachedUsers = [];
@@ -179,6 +189,108 @@
     });
   }
 
+  function formatQueueDuration(ms) {
+    const value = Number(ms);
+    if (!Number.isFinite(value) || value <= 0) {
+      return '--';
+    }
+    const minutes = Math.round(value / 60000);
+    if (minutes < 60) {
+      return `${minutes} min`;
+    }
+    const hours = minutes / 60;
+    return `${hours.toFixed(hours >= 10 ? 0 : 1)} h`;
+  }
+
+  function renderQueue(queue) {
+    if (!queueBody) {
+      return;
+    }
+
+    const jobs = Array.isArray(queue?.jobs) ? queue.jobs : [];
+    queueBody.innerHTML = '';
+
+    if (jobs.length === 0) {
+      const row = document.createElement('tr');
+      const cell = document.createElement('td');
+      cell.colSpan = 5;
+      cell.className = 'is-center is-muted';
+      cell.textContent = 'Nenhum pedido aguardando processamento.';
+      row.appendChild(cell);
+      queueBody.appendChild(row);
+    } else {
+      jobs.forEach((job, index) => {
+        const row = document.createElement('tr');
+
+        const positionCell = document.createElement('td');
+        positionCell.textContent = job.position != null ? job.position : index + 1;
+        row.appendChild(positionCell);
+
+        const clientCell = document.createElement('td');
+        const strong = document.createElement('strong');
+        const user = job.user || {};
+        strong.textContent = user.fullName || user.username || user.id || 'Cliente';
+        const meta = document.createElement('span');
+        meta.className = 'queue-table__meta';
+        meta.textContent = user.username ? `@${user.username}` : user.id || '';
+        clientCell.appendChild(strong);
+        if (meta.textContent) {
+          clientCell.appendChild(meta);
+        }
+        row.appendChild(clientCell);
+
+        const statusCell = document.createElement('td');
+        const statusBadge = document.createElement('span');
+        const normalizedStatus = job.status === 'running' ? 'active' : 'pending';
+        statusBadge.className = `badge badge--status badge--${normalizedStatus}`;
+        statusBadge.textContent = job.status || 'pending';
+        statusCell.appendChild(statusBadge);
+        row.appendChild(statusCell);
+
+        const enqueueCell = document.createElement('td');
+        enqueueCell.textContent = job.enqueuedAt
+          ? new Date(job.enqueuedAt).toLocaleString()
+          : '—';
+        row.appendChild(enqueueCell);
+
+        const commentsCell = document.createElement('td');
+        const comments = Number(job.totalComments);
+        commentsCell.textContent = Number.isFinite(comments) && comments > 0 ? comments : '—';
+        row.appendChild(commentsCell);
+
+        queueBody.appendChild(row);
+      });
+    }
+
+    if (queueLengthEl) {
+      const lengthValue = Number(queue?.queueLength);
+      queueLengthEl.textContent = Number.isFinite(lengthValue) ? lengthValue : jobs.length;
+    }
+    if (queueAverageEl) {
+      queueAverageEl.textContent = formatQueueDuration(queue?.averageDurationMs);
+    }
+
+    if (queueHistoryContainer && queueHistoryList) {
+      const history = Array.isArray(queue?.history) ? queue.history : [];
+      queueHistoryContainer.hidden = history.length === 0;
+      queueHistoryList.innerHTML = '';
+      history.forEach((item) => {
+        const li = document.createElement('li');
+        const strong = document.createElement('strong');
+        const user = item.user || {};
+        strong.textContent = user.fullName || user.username || user.id || 'Cliente';
+        const span = document.createElement('span');
+        const finishedText = item.finishedAt
+          ? new Date(item.finishedAt).toLocaleString()
+          : '—';
+        span.textContent = ` — ${item.status} em ${finishedText}`;
+        li.appendChild(strong);
+        li.appendChild(span);
+        queueHistoryList.appendChild(li);
+      });
+    }
+  }
+
   function renderWatchdog(status) {
     if (!status) {
       watchdogStateEls.forEach((el) => {
@@ -254,6 +366,23 @@
     }
   }
 
+  async function refreshQueue() {
+    try {
+      const res = await fetch(buildUrl('/api/queue'));
+      if (!res.ok) {
+        throw new Error('Falha ao obter fila.');
+      }
+      const data = await res.json();
+      if (data?.queue) {
+        cachedQueue = data.queue;
+        renderQueue(cachedQueue);
+      }
+    } catch (error) {
+      console.error('[Painel] Falha ao atualizar fila:', error);
+      showToast(error.message || 'Erro ao atualizar fila.', 'error');
+    }
+  }
+
   async function runCommand(command, button) {
     if (!command) return;
     const payload = { command };
@@ -301,6 +430,10 @@
       if (data.watchdog) {
         renderWatchdog(data.watchdog);
       }
+      if (data.queue) {
+        cachedQueue = data.queue;
+        renderQueue(cachedQueue);
+      }
 
       showToast(message, 'success');
       if (command === 'autoRun' || command === 'stats') {
@@ -308,6 +441,7 @@
       }
       if (command === 'autoRun') {
         refreshUsers();
+        refreshQueue();
       }
     } catch (error) {
       if (outputEl) {
@@ -369,6 +503,12 @@
       refreshWatchdog();
     });
   });
+
+  if (queueRefreshButton) {
+    queueRefreshButton.addEventListener('click', () => {
+      refreshQueue();
+    });
+  }
 
   if (userForm) {
     userForm.addEventListener('submit', async (event) => {
@@ -491,6 +631,11 @@
     });
   }
 
+  if (cachedQueue) {
+    renderQueue(cachedQueue);
+  } else {
+    refreshQueue();
+  }
   refreshStats();
   refreshUsers();
   refreshWatchdog();

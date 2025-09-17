@@ -25,6 +25,7 @@ class DbWrapper {
         await this._createProfilesTable();
         await this._createCommentsTable();
         await this._createUsersTable();
+        await this._createRunQueueTable();
         console.log("📦 Banco de dados inicializado.");
         return this.db;
       })().catch((err) => {
@@ -99,6 +100,40 @@ class DbWrapper {
 
     await this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_app_user_status ON app_user(status)
+    `);
+  }
+
+  async _createRunQueueTable() {
+    await this._ensureReady();
+    await this.db.exec(`
+      CREATE TABLE IF NOT EXISTS run_queue (
+        id TEXT PRIMARY KEY,
+        userId TEXT NOT NULL,
+        command TEXT NOT NULL DEFAULT 'autoRun',
+        status TEXT NOT NULL DEFAULT 'pending',
+        maxCommentsPerAccount INTEGER NOT NULL DEFAULT 1000,
+        accountLimit INTEGER NOT NULL DEFAULT 100,
+        enqueuedAt TEXT NOT NULL,
+        startedAt TEXT,
+        finishedAt TEXT,
+        durationMs INTEGER,
+        summary TEXT,
+        cleanup TEXT,
+        creditsConsumed INTEGER NOT NULL DEFAULT 0,
+        totalComments INTEGER NOT NULL DEFAULT 0,
+        error TEXT,
+        FOREIGN KEY(userId) REFERENCES app_user(id) ON DELETE CASCADE
+      )
+    `);
+
+    await this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_run_queue_status_enqueued
+      ON run_queue(status, datetime(enqueuedAt))
+    `);
+
+    await this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_run_queue_user
+      ON run_queue(userId, status)
     `);
   }
 

@@ -15,6 +15,7 @@ const {
   getKeepAliveStatus,
   describeApiError,
 } = require('../../src/util.cjs');
+const runQueue = require('../../src/runQueue.cjs');
 
 const LOGS_DIR = path.join(__dirname, '..', '..', 'logs');
 
@@ -34,7 +35,7 @@ router.use((req, res, next) => {
 
 router.get('/', async (req, res) => {
   try {
-    const [stats, users] = await Promise.all([
+    const [stats, users, queue] = await Promise.all([
       collectUsageStats().catch((error) => {
         console.error('[Painel] Falha ao coletar estatísticas:', describeApiError(error));
         return null;
@@ -43,6 +44,10 @@ router.get('/', async (req, res) => {
         console.error('[Painel] Falha ao obter usuários:', error);
         return [];
       }),
+      runQueue.getQueueSnapshot().catch((error) => {
+        console.error('[Painel] Falha ao obter fila:', error);
+        return { jobs: [], history: [], averageDurationMs: 0, queueLength: 0 };
+      }),
     ]);
 
     res.render('dashboard', {
@@ -50,6 +55,7 @@ router.get('/', async (req, res) => {
       page: 'dashboard',
       initialStats: stats,
       initialUsers: users,
+      initialQueue: queue,
     });
   } catch (error) {
     console.error('[Painel] Erro ao renderizar dashboard:', error);
@@ -105,6 +111,8 @@ router.post('/api/run', async (req, res) => {
         maxCommentsPerAccount: 1000,
         clientFilter: (user) => user.role !== 'admin',
       });
+      const queue = await runQueue.getQueueSnapshot();
+      return { message: '✅ Execução concluída com prioridade.', summary, queue };
       return { message: '✅ Execução concluída com prioridade.', summary };
     },
     stats: async () => {
@@ -179,6 +187,16 @@ router.get('/api/users', async (req, res) => {
 
 router.get('/api/watchdog', (req, res) => {
   res.json({ success: true, watchdog: getKeepAliveStatus() });
+});
+
+router.get('/api/queue', async (req, res) => {
+  try {
+    const queue = await runQueue.getQueueSnapshot();
+    res.json({ success: true, queue });
+  } catch (error) {
+    console.error('[Painel] Falha ao consultar fila:', error);
+    res.status(500).json({ success: false, error: 'Não foi possível obter a fila.' });
+  }
 });
 
 router.post('/api/users', async (req, res) => {

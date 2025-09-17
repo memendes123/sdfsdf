@@ -57,7 +57,10 @@
         })();
     </script>
     <% if (includePanelScript) { %>
-        <script>window.__PANEL_BASE__ = '<%= typeof base !== 'undefined' ? base : '' %>';</script>
+        <script>
+            window.__PANEL_BASE__ = '<%= typeof base !== 'undefined' ? base : '' %>';
+            window.__INITIAL_QUEUE__ = <%- JSON.stringify(typeof initialQueue !== 'undefined' ? initialQueue : null) %>;
+        </script>
         <script src="/panel.js" defer></script>
     <% } %>
 </body>

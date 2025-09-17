@@ -2,6 +2,9 @@ const express = require('express');
 const router = express.Router();
 
 const userStore = require('../services/userStore');
+const { collectUsageStats, describeApiError } = require('../../src/util.cjs');
+const rep4repApi = require('../../src/api.cjs');
+const runQueue = require('../../src/runQueue.cjs');
 const {
   autoRun,
   collectUsageStats,
@@ -170,6 +173,16 @@ router.post('/run', async (req, res) => {
     return res.status(400).json({
       success: false,
       error: 'Nenhum perfil Rep4Rep encontrado. Adicione contas antes de executar o comando.',
+  try {
+    remoteProfiles = await rep4repApi.getSteamProfiles({ token: req.user.rep4repKey });
+  } catch (error) {
+    return res.status(502).json({ success: false, error: describeApiError(error) });
+  }
+
+  if (!Array.isArray(remoteProfiles) || remoteProfiles.length === 0) {
+    return res.status(400).json({
+      success: false,
+      error: 'Nenhum perfil Rep4Rep encontrado. Adicione contas antes de executar o comando.',
     });
   }
 
@@ -189,7 +202,23 @@ router.post('/run', async (req, res) => {
         return usedCredits < creditLimit;
       },
     });
+  }
 
+  try {
+    const enqueue = await runQueue.enqueueJob({
+      userId: req.user.id,
+      command: 'autoRun',
+      maxCommentsPerAccount: 1000,
+      accountLimit: 100,
+    });
+
+    const queueStatus = await runQueue.getUserQueueStatus(req.user.id);
+    res.json({
+      success: true,
+      message: enqueue.alreadyQueued
+        ? 'Você já possui uma execução aguardando processamento. Acompanhe sua posição na fila.'
+        : 'Pedido adicionado à fila com sucesso. Aguarde a sua vez para começar.',
+      queue: queueStatus,
     const consumed = isAdmin
       ? summary.totalComments ?? 0
       : Math.min(summary.totalComments ?? usedCredits, creditLimit);
@@ -212,11 +241,18 @@ router.post('/run', async (req, res) => {
       cleanup,
     });
   } catch (error) {
-    if (/Créditos insuficientes/.test(error.message)) {
-      return res.status(402).json({ success: false, error: error.message });
-    }
-    console.error('[API usuário] Falha ao executar comando:', error);
+    console.error('[API usuário] Falha ao enfileirar execução:', error);
     res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.get('/queue', async (req, res) => {
+  try {
+    const queueStatus = await runQueue.getUserQueueStatus(req.user.id);
+    res.json({ success: true, queue: queueStatus });
+  } catch (error) {
+    console.error('[API usuário] Falha ao consultar fila:', error);
+    res.status(500).json({ success: false, error: 'Não foi possível obter o status da fila.' });
   }
 });
 

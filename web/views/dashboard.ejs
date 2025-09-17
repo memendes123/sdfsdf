@@ -99,6 +99,75 @@
             <p class="watchdog-note">O vigia executa o <strong>autoRun prioritário</strong> em ciclos e respeita os limites (100 contas / 1000 comentários). Configure o intervalo via <code>KEEPALIVE_INTERVAL_MINUTES</code> no seu <code>.env</code>.</p>
         </div>
     </article>
+    <article class="card queue-card">
+        <header class="card__header">
+            <div>
+                <h2>Fila de execuções</h2>
+                <p>Acompanhe os pedidos dos clientes e a previsão média para início.</p>
+            </div>
+            <button class="btn btn--ghost" type="button" data-queue-refresh>Atualizar fila</button>
+        </header>
+        <div class="card__body card__body--spaced">
+            <div class="queue-metrics">
+                <div>
+                    <span class="queue-metrics__value" data-queue-length><%= initialQueue ? initialQueue.queueLength : 0 %></span>
+                    <span class="queue-metrics__label">Pedidos na fila</span>
+                </div>
+                <div>
+                    <span class="queue-metrics__value" data-queue-average><%= initialQueue && initialQueue.averageDurationMs ? Math.round(initialQueue.averageDurationMs / 60000) + ' min' : '--' %></span>
+                    <span class="queue-metrics__label">Duração média</span>
+                </div>
+            </div>
+            <div class="queue-table-wrapper">
+                <table class="queue-table">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Cliente</th>
+                            <th>Status</th>
+                            <th>Enfileirado em</th>
+                            <th>Comentários</th>
+                        </tr>
+                    </thead>
+                    <tbody data-queue-body>
+                        <% if (initialQueue && initialQueue.jobs && initialQueue.jobs.length) { %>
+                            <% initialQueue.jobs.forEach(function(job, index) { %>
+                                <tr>
+                                    <td><%= (job.position || index + 1) %></td>
+                                    <td>
+                                        <strong><%= job.user && (job.user.fullName || job.user.username || job.user.id) %></strong>
+                                        <span class="queue-table__meta"><%= job.user && job.user.username ? '@' + job.user.username : job.user && job.user.id %></span>
+                                    </td>
+                                    <td>
+                                        <span class="badge badge--status badge--<%= job.status === 'running' ? 'active' : 'pending' %>"><%= job.status %></span>
+                                    </td>
+                                    <td><%= job.enqueuedAt ? new Date(job.enqueuedAt).toLocaleString('pt-PT') : '—' %></td>
+                                    <td><%= job.totalComments || 0 %></td>
+                                </tr>
+                            <% }) %>
+                        <% } else { %>
+                            <tr data-queue-empty-row>
+                                <td colspan="5" class="is-center is-muted">Nenhum pedido aguardando processamento.</td>
+                            </tr>
+                        <% } %>
+                    </tbody>
+                </table>
+            </div>
+            <details class="queue-history" data-queue-history-container <%= initialQueue && initialQueue.history && initialQueue.history.length ? '' : 'hidden' %>>
+                <summary>Histórico recente</summary>
+                <ul class="queue-history__list" data-queue-history>
+                    <% if (initialQueue && initialQueue.history && initialQueue.history.length) { %>
+                        <% initialQueue.history.forEach(function(item) { %>
+                            <li>
+                                <strong><%= item.user && (item.user.fullName || item.user.username || item.user.id) %></strong>
+                                <span>— <%= item.status %> em <%= item.finishedAt ? new Date(item.finishedAt).toLocaleString('pt-PT') : '—' %></span>
+                            </li>
+                        <% }) %>
+                    <% } %>
+                </ul>
+            </details>
+        </div>
+    </article>
 </section>
 
 <section class="card card--full">
@@ -294,4 +363,5 @@
     </div>
 </div>
 
+<%- include('partials/layout-end', { includePanelScript: true, initialQueue: initialQueue }) %>
 <%- include('partials/layout-end', { includePanelScript: true }) %>

@@ -65,6 +65,7 @@ Automação de comentários para Steam integrada ao [Rep4Rep.com](https://rep4re
 - **Uso próprio via terminal:** a CLI utiliza sempre a `REP4REP_KEY` do `.env`, garantindo prioridade às suas tarefas e funcionamento mesmo que não exista painel.
 - **Vendas e clientes:** o painel registra usuários com créditos, chave Rep4Rep própria e cuida do débito automático a cada comentário concluído.
 - **Agendador prioritário:** toda execução dispara primeiro o lote do proprietário (token do `.env` ou da conta admin) e, somente se não houver comentários pendentes, percorre clientes elegíveis.
+- **Fila inteligente:** pedidos disparados pelo painel ou pela API entram em uma fila FIFO com posição e estimativa de início; apenas um cliente é atendido por vez após a rodada do proprietário.
 
 ## 🖥️ Comandos da CLI
 | Nº  | Ação                                                            |
@@ -85,7 +86,6 @@ Automação de comentários para Steam integrada ao [Rep4Rep.com](https://rep4re
 | 14  | Criar backup do banco                                           |
 | 15  | **Ciclo completo**: adiciona contas ➜ executa autoRun ➜ remove  |
 | 16  | Ativar modo vigia (loop automático em segundo plano)             |
-=======
 | 0   | Sair                                                            |
 
 A opção 15 impõe automaticamente **100 contas** e **1000 comentários por conta** como teto, garantindo que execuções pontuais não ultrapassem o combinado com clientes.
@@ -95,6 +95,10 @@ A opção 15 impõe automaticamente **100 contas** e **1000 comentários por con
 - O agendador corta a lista de contas para, no máximo, 100 perfis por lote ao atender clientes.
 - Clientes precisam ter perfis ativos no Rep4Rep antes da execução; o backend valida isso antes de iniciar.
 - Ao rodar tarefas para clientes (via painel ou API), os perfis usados são removidos automaticamente do Rep4Rep ao final para não expor suas contas proprietárias.
+- Cada usuário só pode ter um pedido ativo; a fila exibe posição, pedidos à frente e estimativa de início tanto no painel quanto no portal do cliente.
+- Um serviço interno cria um **backup automático** do banco a cada 3 dias (ou quando nenhum backup recente é encontrado). Admins ainda podem gerar backups manuais sempre que desejarem.
+- O modo vigia pode ser acionado pela CLI (opção 16) ou pelo painel admin para manter o bot em execução contínua no servidor respeitando o limite de 100 contas / 1000 comentários.
+
 - Um serviço interno cria um **backup automático** do banco a cada 3 dias (ou quando nenhum backup recente é encontrado). Admins ainda podem gerar backups manuais sempre que desejarem.
 - O modo vigia pode ser acionado pela CLI (opção 16) ou pelo painel admin para manter o bot em execução contínua no servidor respeitando o limite de 100 contas / 1000 comentários.
 
@@ -108,13 +112,17 @@ O servidor Express roda em `http://localhost:3000` (ajustável via `PORT`). A ro
 3. Ao clicar em **Executar autoRun** o painel busca essa chave no banco, executa o lote prioritário e segue com a fila de clientes. A chave do `.env` permanece oculta para o navegador.
 4. O painel ainda traz estatísticas, criação de backups e histórico de logs em tempo real.
 5. O card **Modo VPS / Vigia** permite iniciar/parar o loop automático diretamente do painel e acompanha status, intervalo configurado e erros do ciclo.
+6. O card **Fila de execuções** mostra pedidos pendentes, histórico recente e permite atualizar a fila manualmente.
+7. Clique em **Gerenciar** na tabela de clientes para abrir o editor lateral e ajustar dados completos (status, créditos, key, telefone, role) sem editar código.
 6. Clique em **Gerenciar** na tabela de clientes para abrir o editor lateral e ajustar dados completos (status, créditos, key, telefone, role) sem editar código.
+
 
 
 ### Portal do cliente
 - Cadastro exige nome completo, username, email, senha (≥ 8 caracteres), data de nascimento, Discord ID, Rep4Rep ID e telefone/WhatsApp com DDI.
 - Após o registro o status fica `pending`. O administrador precisa ativar e conceder créditos antes de liberar o botão **Rodar tarefas**.
 - Clientes autenticados visualizam créditos, status, token de API e podem atualizar a própria chave Rep4Rep.
+- Ao solicitar execução o pedido entra na fila; o painel mostra posição/estimativa em tempo real e o portal do cliente exibe o mesmo resumo com botão de atualizar status.
 
 ### Créditos e permissões
 - **1 crédito = 1 comentário confirmado.** Durante o autoRun, cada comentário chama o callback de débito.
@@ -126,7 +134,6 @@ O servidor Express roda em `http://localhost:3000` (ajustável via `PORT`). A ro
 - O cabeçalho do painel inclui o botão 🌐 **Idioma** com um seletor discreto alimentado pelo Google Translate.
 - Estão disponíveis traduções instantâneas para português, inglês, espanhol, francês, italiano e alemão sem recarregar a página.
 - A interface do widget segue o tema escuro do painel e pode ser recolhida para não interferir no fluxo de trabalho.
-
 
 ## 🔐 Armazenamento e segurança
 - Usuários e perfis ficam no SQLite (`steamprofiles.db`). Senhas são protegidas com PBKDF2 (sal + hash) e tokens API são UUIDs aleatórios.
@@ -143,7 +150,6 @@ O servidor Express roda em `http://localhost:3000` (ajustável via `PORT`). A ro
 | `PORT` | Porta HTTP do painel (padrão `3000`). |
 | `DATABASE_PATH` | Caminho alternativo para o `steamprofiles.db` (opcional). |
 | `KEEPALIVE_INTERVAL_MINUTES` | Intervalo (min) entre ciclos do modo vigia automático (mínimo 5). |
-
 
 Outras variáveis herdadas do `env.example` continuam válidas (SMTP, Discord, etc.).
 
