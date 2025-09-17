@@ -395,6 +395,7 @@ async function cancelJob(id, { reason = 'Cancelado manualmente' } = {}) {
     `SELECT q.*, u.username AS userUsername, u.fullName AS userFullName, u.role AS userRole,
             u.status AS userStatus, u.discordWebhookUrl AS userDiscordWebhookUrl,
             u.credits AS userCredits
+            u.status AS userStatus, u.credits AS userCredits
        FROM run_queue q
        LEFT JOIN app_user u ON u.id = q.userId
       WHERE q.id = ?`,
@@ -428,6 +429,7 @@ async function cancelJob(id, { reason = 'Cancelado manualmente' } = {}) {
     `SELECT q.*, u.username AS userUsername, u.fullName AS userFullName, u.role AS userRole,
             u.status AS userStatus, u.discordWebhookUrl AS userDiscordWebhookUrl,
             u.credits AS userCredits
+            u.status AS userStatus, u.credits AS userCredits
        FROM run_queue q
        LEFT JOIN app_user u ON u.id = q.userId
       WHERE q.id = ?`,
