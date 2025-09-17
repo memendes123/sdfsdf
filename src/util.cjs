@@ -130,6 +130,8 @@ async function sendDiscordWebhook(payload = {}, options = {}) {
   const overrideUrl = (options.overrideUrl || options.webhookUrl || '').trim();
   const targetUrl = overrideUrl || DISCORD_WEBHOOK_URL;
   if (!targetUrl) {
+async function sendDiscordWebhook(payload = {}) {
+  if (!DISCORD_WEBHOOK_URL) {
     return false;
   }
 
@@ -147,6 +149,13 @@ async function sendDiscordWebhook(payload = {}, options = {}) {
     };
 
     const response = await fetch(targetUrl, {
+    const body = {
+      username: DISCORD_WEBHOOK_USERNAME,
+      ...(DISCORD_WEBHOOK_AVATAR_URL ? { avatar_url: DISCORD_WEBHOOK_AVATAR_URL } : {}),
+      ...payload,
+    };
+
+    const response = await fetch(DISCORD_WEBHOOK_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -164,6 +173,7 @@ async function sendDiscordWebhook(payload = {}, options = {}) {
       const snippet = details ? details.slice(0, 140) : '';
       log(
         `⚠️ Webhook do Discord${targetLabel} respondeu com status ${response.status}${
+        `⚠️ Webhook do Discord respondeu com status ${response.status}${
           snippet ? ` – ${snippet}` : ''
         }`,
       );
@@ -174,6 +184,8 @@ async function sendDiscordWebhook(payload = {}, options = {}) {
   } catch (error) {
     const targetLabel = overrideUrl ? ' (customizado)' : '';
     log(`⚠️ Falha ao enviar webhook do Discord${targetLabel}: ${error.message}`);
+
+    log(`⚠️ Falha ao enviar webhook do Discord: ${error.message}`);
     return false;
   }
 }
@@ -226,6 +238,13 @@ async function announceQueueEvent(event = {}) {
   const client = event.client || job?.user || null;
   const clientLabel = formatClientLabel(client);
   const clientWebhookUrl = (client?.discordWebhookUrl || '').trim();
+  if (!DISCORD_WEBHOOK_URL) {
+    return false;
+  }
+
+  const job = event.job || null;
+  const client = event.client || job?.user || null;
+  const clientLabel = formatClientLabel(client);
   const embed = {
     timestamp: new Date().toISOString(),
     fields: [],
@@ -324,6 +343,7 @@ async function announceQueueEvent(event = {}) {
 
   const results = await Promise.allSettled(deliveries);
   return results.some((result) => result.status === 'fulfilled' && result.value === true);
+  return sendDiscordWebhook({ embeds: [embed] });
 }
 
 function readMaintenanceMetadata() {
@@ -1190,6 +1210,8 @@ async function prioritizedAutoRun(options = {}) {
       } catch (notifyError) {
         log(`⚠️ Falha ao notificar lote prioritário: ${notifyError.message}`);
       }
+      await announceQueueEvent({ type: 'owner.completed', summary, webhookUrl: ownerWebhookUrl, client: ownerUser });
+      await announceQueueEvent({ type: 'owner.completed', summary });
       if (summary.totalComments > 0) {
         log('Pedidos do proprietário atendidos. Continuando com a fila de clientes.');
       }
@@ -1201,11 +1223,37 @@ async function prioritizedAutoRun(options = {}) {
   }
 
   let completedJobs = 0;
+  let processedJobs = 0;
+
+  while (true) {
+    let job;
+    try {
+      job = await runQueue.takeNextPendingJob();
+    } catch (error) {
+      log(`❌ Falha ao obter próxima ordem da fila: ${error.message}`);
+      break;
+    }
+
+    if (!job) {
+      break;
+    }
 
   const processJob = async (job) => {
     const client = job.user || (await userStore.getUser(job.userId));
     if (!client) {
       return failQueuedJob(job, null, 'Usuário não encontrado.', `❌ Pedido ${job.id} removido da fila: usuário inexistente.`);
+      const failedJob = await runQueue.failJob(job.id, 'Usuário não encontrado.');
+      log(`❌ Pedido ${job.id} removido da fila: usuário inexistente.`);
+      try {
+        await announceQueueEvent({
+          type: 'job.failed',
+          job: failedJob,
+          error: 'Usuário não encontrado.',
+        });
+      } catch (notifyError) {
+        log(`⚠️ Falha ao notificar erro via webhook: ${notifyError.message}`);
+      }
+      continue;
     }
 
     const clientLabel = formatClientLabel(client);
@@ -1235,6 +1283,51 @@ async function prioritizedAutoRun(options = {}) {
         'Chave Rep4Rep não configurada.',
         `⚠️ ${clientLabel} ignorado: key Rep4Rep ausente.`,
       );
+      const failedJob = await runQueue.failJob(job.id, 'Pedido bloqueado pelo filtro do operador.');
+      log(`⚠️ Pedido ${job.id} ignorado (filtro do operador).`);
+      try {
+        await announceQueueEvent({
+          type: 'job.failed',
+          job: failedJob,
+          client,
+          error: 'Pedido bloqueado pelo filtro do operador.',
+        });
+      } catch (notifyError) {
+        log(`⚠️ Falha ao notificar erro via webhook: ${notifyError.message}`);
+      }
+      continue;
+    }
+
+    if (client.status !== 'active') {
+      const failedJob = await runQueue.failJob(job.id, 'Conta inativa ou bloqueada.');
+      log(`⚠️ ${clientLabel} ignorado: conta não está ativa.`);
+      try {
+        await announceQueueEvent({
+          type: 'job.failed',
+          job: failedJob,
+          client,
+          error: 'Conta inativa ou bloqueada.',
+        });
+      } catch (notifyError) {
+        log(`⚠️ Falha ao notificar erro via webhook: ${notifyError.message}`);
+      }
+      continue;
+    }
+
+    if (!client.rep4repKey) {
+      const failedJob = await runQueue.failJob(job.id, 'Chave Rep4Rep não configurada.');
+      log(`⚠️ ${clientLabel} ignorado: key Rep4Rep ausente.`);
+      try {
+        await announceQueueEvent({
+          type: 'job.failed',
+          job: failedJob,
+          client,
+          error: 'Chave Rep4Rep não configurada.',
+        });
+      } catch (notifyError) {
+        log(`⚠️ Falha ao notificar erro via webhook: ${notifyError.message}`);
+      }
+      continue;
     }
 
     const isAdmin = client.role === 'admin';
@@ -1246,10 +1339,46 @@ async function prioritizedAutoRun(options = {}) {
         'Créditos insuficientes.',
         `⚠️ ${clientLabel} sem créditos suficientes. Pedido removido.`,
       );
+      const failedJob = await runQueue.failJob(job.id, 'Créditos insuficientes.');
+      log(`⚠️ ${clientLabel} sem créditos suficientes. Pedido removido.`);
+      try {
+        await announceQueueEvent({
+          type: 'job.failed',
+          job: failedJob,
+          client,
+          error: 'Créditos insuficientes.',
+        });
+      } catch (notifyError) {
+        log(`⚠️ Falha ao notificar erro via webhook: ${notifyError.message}`);
+      }
+      continue;
     }
 
     const jobMaxComments = Math.min(1000, Math.max(1, job.maxCommentsPerAccount || maxComments));
     const jobAccountLimit = Math.min(100, Math.max(1, job.accountLimit || accountLimit));
+
+    let usedCredits = 0;
+    const upstreamTaskHandler = baseRunOptions.onTaskComplete;
+    const onTaskComplete = async (payload) => {
+      if (typeof upstreamTaskHandler === 'function') {
+        try {
+          const upstreamResult = await upstreamTaskHandler(payload);
+          if (upstreamResult === false) {
+            return false;
+          }
+        } catch (callbackError) {
+          log(`⚠️ onTaskComplete custom handler falhou: ${callbackError.message}`);
+        }
+      }
+
+      if (isAdmin) {
+        return true;
+      }
+
+      usedCredits += 1;
+      return usedCredits < creditLimit;
+    };
+
 
     let usedCredits = 0;
     const upstreamTaskHandler = baseRunOptions.onTaskComplete;
@@ -1298,6 +1427,7 @@ async function prioritizedAutoRun(options = {}) {
           }
         } catch (creditError) {
           log(`⚠️ Falha ao debitar créditos de ${clientLabel}: ${creditError.message}`);
+          log(`⚠️ Falha ao debitar créditos de ${client.username || client.id}: ${creditError.message}`);
         }
       }
 
@@ -1349,6 +1479,7 @@ async function prioritizedAutoRun(options = {}) {
 
       if (totalComments > 0) {
         log(`✅ Execução concluída para ${clientLabel}.`);
+        log(`✅ Execução concluída para ${client.username || client.id}.`);
       } else {
         log(`ℹ️ Nenhum comentário pendente para ${clientLabel}.`);
       }
@@ -1381,6 +1512,14 @@ async function prioritizedAutoRun(options = {}) {
     result.clients.push(outcome);
     if (outcome.status === 'completed') {
       completedJobs += 1;
+      const failedJob = await runQueue.failJob(job.id, error.message);
+      log(`❌ Falha ao processar ${clientLabel}: ${error.message}`);
+      result.clients.push({ client, error: error.message, queueJob: failedJob, status: 'failed' });
+      try {
+        await announceQueueEvent({ type: 'job.failed', job: failedJob, client, error: error.message });
+      } catch (notifyError) {
+        log(`⚠️ Falha ao notificar erro via webhook: ${notifyError.message}`);
+      }
     }
   }
 
