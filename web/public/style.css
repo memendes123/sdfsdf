@@ -359,6 +359,22 @@ a {
 .card__header {
   padding: 24px 28px 12px;
   border-bottom: 1px solid var(--panel-border);
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.card__actions {
+  display: flex;
+  gap: 10px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+
+.card__actions .btn {
+  white-space: nowrap;
 }
 
 .card__header h2,
@@ -495,6 +511,13 @@ a {
   display: block;
   font-size: 0.75rem;
   color: var(--text-muted);
+}
+
+.queue-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .queue-history {
@@ -1195,6 +1218,16 @@ body .skiptranslate,
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.client-queue__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.client-queue__actions .btn {
+  white-space: nowrap;
 }
 
 .client-queue__message {

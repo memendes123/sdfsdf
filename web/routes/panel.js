@@ -260,6 +260,48 @@ router.get('/api/queue', async (req, res) => {
   }
 });
 
+router.post('/api/queue/clear', async (req, res) => {
+  const { reason } = req.body || {};
+  const effectiveReason = typeof reason === 'string' && reason.trim()
+    ? reason.trim()
+    : 'Cancelado em massa (painel)';
+
+  try {
+    const result = await runQueue.cancelAllPendingJobs({ reason: effectiveReason });
+
+    if (Array.isArray(result.jobs) && result.jobs.length) {
+      const payload = {
+        type: 'job.cancelled',
+        reason: effectiveReason,
+        cancelledBy: req.adminUser?.name || null,
+      };
+
+      await Promise.all(
+        result.jobs.map(async (job) => {
+          try {
+            await announceQueueEvent({ ...payload, job });
+          } catch (notifyError) {
+            console.warn('[Painel] Falha ao enviar webhook de cancelamento em massa:', notifyError.message);
+          }
+        }),
+      );
+    }
+
+    const queue = await runQueue.getQueueSnapshot();
+    res.json({
+      success: true,
+      message: result.cancelledCount > 0
+        ? `${result.cancelledCount} pedido(s) removido(s) da fila.`
+        : 'Nenhum pedido pendente para remover.',
+      cancelled: result,
+      queue,
+    });
+  } catch (error) {
+    console.error('[Painel] Falha ao limpar fila:', error);
+    res.status(500).json({ success: false, error: 'Não foi possível limpar a fila.' });
+  }
+});
+
 router.post('/api/queue/:id/cancel', async (req, res) => {
   const { id } = req.params;
   const { reason } = req.body || {};
@@ -305,6 +347,28 @@ router.post('/api/queue/:id/cancel', async (req, res) => {
       ? 409
       : 500;
     res.status(status).json({ success: false, error: message });
+  }
+});
+
+router.post('/api/queue/:id/reorder', async (req, res) => {
+  const { id } = req.params;
+  const { position } = req.body || {};
+
+  if (!id) {
+    return res.status(400).json({ success: false, error: 'Identificador do pedido obrigatório.' });
+  }
+
+  try {
+    await runQueue.reorderJob(id, { position });
+    const queue = await runQueue.getQueueSnapshot();
+    res.json({
+      success: true,
+      message: 'Ordem do pedido atualizada.',
+      queue,
+    });
+  } catch (error) {
+    console.error('[Painel] Falha ao reordenar pedido:', error);
+    res.status(400).json({ success: false, error: error.message || 'Não foi possível reordenar o pedido.' });
   }
 });
 

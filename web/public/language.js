@@ -126,9 +126,6 @@
   }
 
   const artifactCleanupDelays = [0, 120, 400, 1200, 2400];
-  }
-
-  const artifactCleanupDelays = [0, 120, 400];
   function scheduleArtifactCleanup() {
     artifactCleanupDelays.forEach((delay) => {
       window.setTimeout(cleanGoogleArtifacts, delay);

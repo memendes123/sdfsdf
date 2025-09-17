@@ -156,7 +156,10 @@
                     <div class="client-queue" data-client-queue hidden>
                         <div class="client-queue__header">
                             <h3>Status da fila</h3>
-                            <button type="button" class="btn btn--ghost btn--small" data-client-queue-refresh>Atualizar</button>
+                            <div class="client-queue__actions">
+                                <button type="button" class="btn btn--ghost btn--small" data-client-queue-refresh>Atualizar</button>
+                                <button type="button" class="btn btn--outline btn--small" data-client-queue-cancel hidden>Cancelar pedido</button>
+                            </div>
                         </div>
                         <p class="client-queue__message" data-client-queue-message>Nenhuma ordem aguardando processamento.</p>
                         <dl class="client-queue__stats">

@@ -55,16 +55,18 @@ function getEnvRep4RepKey() {
 
 function resolveApiToken(token, { fallbackToEnv = true } = {}) {
   if (token === false) {
-  if (token === '' || token === false) {
     return null;
   }
+
   const direct = normalizeApiToken(token);
   if (direct) {
     return direct;
   }
+
   if (!fallbackToEnv) {
     return null;
   }
+
   const envToken = normalizeApiToken(process.env.REP4REP_KEY);
   return envToken || null;
 }
@@ -1368,19 +1370,8 @@ async function prioritizedAutoRun(options = {}) {
       );
     }
 
-    const jobApiToken = resolveClientApiToken(client);
-    if (!jobApiToken) {
-    const allowEnvFallback = client?.role && client.role !== 'customer';
-    const jobApiToken = resolveApiToken(client.rep4repKey, {
-      fallbackToEnv: Boolean(allowEnvFallback),
-    });
-    if (!jobApiToken) {
-    const clientToken = resolveApiToken(client.rep4repKey, {
-      fallbackToEnv: client.role === 'admin',
-    });
-
-    const clientToken = resolveApiToken(client.rep4repKey, { fallbackToEnv: false });
-    if (!clientToken) {
+    const apiToken = resolveClientApiToken(client);
+    if (!apiToken) {
       return failQueuedJob(
         job,
         client,
@@ -1432,8 +1423,7 @@ async function prioritizedAutoRun(options = {}) {
     try {
       const summary = await autoRun({
         ...baseRunOptions,
-        apiToken: jobApiToken,
-        apiToken: clientToken,
+        apiToken,
         maxCommentsPerAccount: jobMaxComments,
         accountLimit: jobAccountLimit,
         onTaskComplete,
@@ -1462,8 +1452,7 @@ async function prioritizedAutoRun(options = {}) {
       }
 
       const cleanup = await removeRemoteProfiles(summary, {
-        apiToken: jobApiToken,
-        apiToken: clientToken,
+        apiToken,
         apiClient: baseRunOptions.apiClient || api,
       });
 
