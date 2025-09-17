@@ -1,12 +1,19 @@
 const fs = require('fs');
 const path = require('path');
 const db = require('./db.cjs');
-const api = require('./api.cjs');
+const apiModule = require('./api.cjs');
+const api = apiModule;
+const { ApiError } = apiModule;
 const steamBot = require('./steamBot.cjs');
 const { table } = require('table');
 const ReadLine = require('readline');
 const moment = require('moment');
 require('dotenv').config();
+
+const ROOT_DIR = path.join(__dirname, '..');
+const ACCOUNTS_PATH = path.join(ROOT_DIR, 'accounts.txt');
+const LOGS_DIR = path.join(ROOT_DIR, 'logs');
+
 
 let rl = null;
 
@@ -39,9 +46,8 @@ function log(message, emptyLine = false) {
 
 function logToFile(username, success = 0, fail = 0) {
     const date = new Date().toISOString().split('T')[0];
-    const logDir = path.join(__dirname, '..', 'logs');
-    const logFile = path.join(logDir, `${date}.log`);
-    if (!fs.existsSync(logDir)) fs.mkdirSync(logDir);
+    const logFile = path.join(LOGS_DIR, `${date}.log`);
+    if (!fs.existsSync(LOGS_DIR)) fs.mkdirSync(LOGS_DIR, { recursive: true });
     const timestamp = new Date().toLocaleTimeString();
     const line = `[${timestamp}] ${username} - Success: ${success} | Fail: ${fail}\n`;
     fs.appendFileSync(logFile, line);
@@ -49,15 +55,68 @@ function logToFile(username, success = 0, fail = 0) {
 
 function logInvalidAccount(username, reason) {
     const date = new Date().toISOString().split('T')[0];
-    const logDir = path.join(__dirname, '..', 'logs');
-    const logFile = path.join(logDir, `invalid-${date}.log`);
-    if (!fs.existsSync(logDir)) fs.mkdirSync(logDir);
+    const logFile = path.join(LOGS_DIR, `invalid-${date}.log`);
+    if (!fs.existsSync(LOGS_DIR)) fs.mkdirSync(LOGS_DIR, { recursive: true });
     const timestamp = new Date().toLocaleTimeString();
     const line = `[${timestamp}] ${username} - ${reason}\n`;
     fs.appendFileSync(logFile, line);
 }
 
 function removeFromAccountsFile(username) {
+
+    if (!fs.existsSync(ACCOUNTS_PATH)) {
+        return;
+    }
+    const lines = fs.readFileSync(ACCOUNTS_PATH, 'utf-8').split(/\r?\n/);
+    const filtered = lines.filter(line => line && !line.startsWith(`${username}:`));
+    const output = filtered.join('\n');
+    fs.writeFileSync(ACCOUNTS_PATH, output ? `${output}\n` : '');
+}
+
+function readAccountsFile({ silent = false } = {}) {
+    if (!fs.existsSync(ACCOUNTS_PATH)) {
+        if (!silent) {
+            log(`Arquivo accounts.txt não encontrado em ${ACCOUNTS_PATH}.`, true);
+        }
+        return [];
+    }
+
+    const content = fs.readFileSync(ACCOUNTS_PATH, 'utf-8');
+    return content
+        .split(/\r?\n/)
+        .map(line => line.trim())
+        .filter(Boolean);
+}
+
+function describeApiError(error) {
+    if (error instanceof ApiError) {
+        const detail = error.payload?.message || error.payload?.error;
+        const suffix = detail && detail !== error.message ? ` (${detail})` : '';
+        const status = error.status ? ` [status ${error.status}]` : '';
+        return `${error.message}${suffix}${status}`;
+    }
+    return error?.message || String(error);
+}
+
+function parseStoredCookies(rawCookies, username) {
+    if (!rawCookies) {
+        return [];
+    }
+
+    if (typeof rawCookies === 'string') {
+        try {
+            const parsed = JSON.parse(rawCookies);
+            return Array.isArray(parsed) ? parsed : [];
+        } catch (error) {
+            if (username) {
+                log(`[${username}] Failed to parse stored cookies. Ignorando cookies salvos.`);
+            }
+            return [];
+        }
+    }
+
+    return Array.isArray(rawCookies) ? rawCookies : [];
+
     const filePath = path.join(__dirname, '..', 'accounts.txt');
     if (!fs.existsSync(filePath)) {
         return;
@@ -65,6 +124,7 @@ function removeFromAccountsFile(username) {
     const lines = fs.readFileSync(filePath, 'utf-8').split('\n');
     const filtered = lines.filter(line => !line.startsWith(username + ':'));
     fs.writeFileSync(filePath, filtered.join('\n'));
+
 }
 
 function parseStoredCookies(rawCookies, username) {
@@ -88,56 +148,95 @@ function parseStoredCookies(rawCookies, username) {
 }
 
 async function autoRun() {
-    const accounts = fs.readFileSync('accounts.txt', 'utf-8').split('\n').filter(Boolean);
-    let profiles = await db.getAllProfiles();
-    let r4rProfiles = await api.getSteamProfiles();
+    const accounts = readAccountsFile();
+    if (accounts.length === 0) {
+        log('Nenhuma conta configurada no accounts.txt. Adicione contas antes de executar o autoRun.', true);
+        return;
+    }
+
+    let profiles;
+    try {
+        profiles = await db.getAllProfiles();
+    } catch (error) {
+        log(`❌ Falha ao carregar perfis do banco de dados: ${error.message}`, true);
+        return;
+    }
+
+    let r4rProfiles;
+    try {
+        r4rProfiles = await api.getSteamProfiles();
+    } catch (error) {
+        log(`[API] Não foi possível obter os perfis do Rep4Rep: ${describeApiError(error)}`, true);
+        return;
+    }
+
+    if (!Array.isArray(r4rProfiles) || r4rProfiles.length === 0) {
+        log('[API] Nenhum perfil Rep4Rep encontrado. Execute a sincronização (--auth-profiles) antes do autoRun.', true);
+        return;
+    }
 
     for (const [i, account] of accounts.entries()) {
         const [username, password, sharedSecret] = account.split(':');
         if (!username || !password || !sharedSecret) {
-            log(`Invalid account format for ${account}`);
+            log(`Formato inválido de conta: ${account}`);
             continue;
         }
-        
+
         log(`Attempting to leave comments from: ${username}`);
 
-        let profile = profiles.find(p => p.username === username);
+        const profile = profiles.find(p => p.username === username);
         if (!profile) {
-            log(`Profile not found in database for username: ${username}`);
+            log(`Perfil não encontrado no banco de dados para o usuário: ${username}`);
             continue;
         }
 
-        let hours = moment().diff(moment(profile.lastComment), 'hours');
-        if (!profile.lastComment || hours >= 24) {
-            let r4rSteamProfile = r4rProfiles.find(r4rProfile => r4rProfile['steamId'] == profile.steamId);
+        const hoursSinceLastComment = profile.lastComment
+            ? moment().diff(moment(profile.lastComment), 'hours')
+            : Infinity;
+
+        if (!profile.lastComment || hoursSinceLastComment >= 24) {
+            const r4rSteamProfile = r4rProfiles.find(r4rProfile => r4rProfile?.steamId == profile.steamId);
             if (!r4rSteamProfile) {
-                log(`[${username}] steamProfile doesn't exist on rep4rep`);
-                log(`Try syncing it with --auth-profiles`, true);
+                log(`[${username}] steamProfile não existe no Rep4Rep.`);
+                log('Sincronize os perfis com --auth-profiles e tente novamente.', true);
                 continue;
             }
 
-            let tasks = await api.getTasks(r4rSteamProfile.id);
-            if (!tasks || tasks.length === 0) {
-                log(`[${username}] No tasks found for the profile. Skipping...`, true);
+            let tasks;
+            try {
+                tasks = await api.getTasks(r4rSteamProfile.id);
+            } catch (error) {
+                log(`[${username}] Falha ao obter tarefas: ${describeApiError(error)}`, true);
                 continue;
             }
 
-            let client = steamBot();
-            await loginWithRetries(client, username, password, sharedSecret, profile.cookies);
-            if (client.status !== 4 && !await client.isLoggedIn()) {
-                log(`[${username}] is logged out. reAuth needed`, true);
+            if (!Array.isArray(tasks) || tasks.length === 0) {
+                log(`[${username}] Nenhuma tarefa disponível. Pulando...`, true);
                 continue;
-            } else {
-                await autoRunComments(profile, client, tasks, r4rSteamProfile.id, 10);
-                if (i !== accounts.length - 1) {
-                    await sleep(process.env.LOGIN_DELAY);
-                }
+            }
+
+            const client = steamBot();
+            let loggedIn = false;
+            try {
+                loggedIn = await loginWithRetries(client, username, password, sharedSecret, profile.cookies);
+            } catch (error) {
+                log(`[${username}] Falha ao autenticar: ${error.message}`, true);
                 continue;
+            }
+
+            if (!loggedIn || (client.status !== statusMessage.loggedIn && !await client.isLoggedIn())) {
+                log(`[${username}] não está logado. Reautenticação necessária.`, true);
+                continue;
+            }
+
+            await autoRunComments(profile, client, tasks, r4rSteamProfile.id, 10);
+            if (i !== accounts.length - 1) {
+                await sleep(process.env.LOGIN_DELAY);
             }
         } else {
-            log(`[${username}] is not ready yet`);
-            log(`[${username}] try again in: ${Math.round(24 - hours)} hours`, true);
-            continue;
+            const remaining = Math.max(0, Math.round(24 - hoursSinceLastComment));
+            log(`[${username}] ainda está em cooldown.`);
+            log(`[${username}] tente novamente em: ${remaining} horas`, true);
         }
     }
 
@@ -164,26 +263,51 @@ async function autoRunComments(profile, client, tasks, authorSteamProfileId, max
         log(`[${profile.username}] posting comment:`);
         log(`${task.requiredCommentText} > ${task.targetSteamProfileName}`, true);
 
+        let commentSent = false;
         try {
             await client.postComment(task.targetSteamProfileId, task.requiredCommentText);
-            await api.completeTask(task.taskId, task.requiredCommentId, authorSteamProfileId);
-            await db.updateLastComment(profile.steamId);
-            log(`[${profile.username}] comment posted and marked as completed`, true);
-            commentsPosted++;
-            completedTasks.add(task.taskId);
-            consecutiveFailures = 0; // Reset failures on success
+            commentSent = true;
         } catch (err) {
             log(`[${profile.username}] failed to post comment: ${err.message}`);
             log(`Debug Info: TargetSteamProfileId: ${task.targetSteamProfileId}, RequiredCommentText: ${task.requiredCommentText}`);
             consecutiveFailures++;
         }
 
+        if (!commentSent) {
+            await sleep(process.env.COMMENT_DELAY);
+            continue;
+        }
+
+        completedTasks.add(task.taskId);
+        commentsPosted++;
+        consecutiveFailures = 0;
+
+        try {
+            await api.completeTask(task.taskId, task.requiredCommentId, authorSteamProfileId);
+        } catch (error) {
+            log(`[${profile.username}] falha ao confirmar a tarefa na API: ${describeApiError(error)}`);
+        }
+
+        try {
+            await db.updateLastComment(profile.steamId);
+        } catch (error) {
+            log(`[${profile.username}] Falha ao atualizar informações do banco: ${error.message}`);
+        }
+
+        log(`[${profile.username}] comment posted and recorded`, true);
         await sleep(process.env.COMMENT_DELAY);
     }
 
     while (commentsPosted < maxComments && consecutiveFailures < maxConsecutiveFailures && attempts < maxAttempts) {
         log(`[${profile.username}] Attempting additional comment ${commentsPosted + 1}/${maxComments}`);
-        let additionalTasks = await api.getTasks(authorSteamProfileId); // Fetch new tasks to ensure updated list
+        let additionalTasks;
+        try {
+            additionalTasks = await api.getTasks(authorSteamProfileId); // Fetch new tasks to ensure updated list
+        } catch (error) {
+            log(`[${profile.username}] Falha ao atualizar lista de tarefas: ${describeApiError(error)}`, true);
+            break;
+        }
+
         additionalTasks = additionalTasks.filter(t => !completedTasks.has(t.taskId));
 
         if (additionalTasks.length === 0) {
@@ -193,6 +317,7 @@ async function autoRunComments(profile, client, tasks, authorSteamProfileId, max
             continue;
         }
 
+        let postedThisRound = false;
         for (const randomTask of additionalTasks) {
             if (!randomTask || !randomTask.requiredCommentText || !randomTask.targetSteamProfileId) {
                 log(`[${profile.username}] Invalid random task for additional comments. Skipping...`, true);
@@ -203,21 +328,41 @@ async function autoRunComments(profile, client, tasks, authorSteamProfileId, max
             const targetSteamProfileId = randomTask.targetSteamProfileId;
             try {
                 await client.postComment(targetSteamProfileId, randomComment);
-                await api.completeTask(randomTask.taskId, randomTask.requiredCommentId, authorSteamProfileId); // Mark additional comments as completed
-                commentsPosted++;
-                log(`[${profile.username}] additional comment posted successfully`, true);
-                consecutiveFailures = 0; // Reset failures on success
-                attempts = 0; // Reset attempts on success
-                completedTasks.add(randomTask.taskId); // Mark task as completed
-                break; // Exit the for loop to attempt the next comment
+                postedThisRound = true;
             } catch (err) {
                 log(`[${profile.username}] failed to post additional comment: ${err.message}`);
                 log(`Debug Info: TargetSteamProfileId: ${targetSteamProfileId}, RandomComment: ${randomComment}`);
                 consecutiveFailures++;
+                await sleep(process.env.COMMENT_DELAY);
+                continue;
             }
+
+            completedTasks.add(randomTask.taskId);
+            commentsPosted++;
+            consecutiveFailures = 0;
+
+            try {
+                await api.completeTask(randomTask.taskId, randomTask.requiredCommentId, authorSteamProfileId); // Mark additional comments as completed
+            } catch (error) {
+                log(`[${profile.username}] falha ao confirmar tarefa adicional: ${describeApiError(error)}`);
+            }
+
+            try {
+                await db.updateLastComment(profile.steamId);
+            } catch (error) {
+                log(`[${profile.username}] Falha ao atualizar informações do banco: ${error.message}`);
+            }
+
+            log(`[${profile.username}] additional comment posted successfully`, true);
             await sleep(process.env.COMMENT_DELAY);
+            break; // Exit the for loop to attempt the next comment
         }
-        attempts++;
+
+        if (postedThisRound) {
+            attempts = 0;
+        } else {
+            attempts++;
+        }
     }
 
     log(`[${profile.username}] done with posting comments. Total comments posted: ${commentsPosted}`, true);
@@ -350,7 +495,11 @@ async function authAllProfiles() {
                 log(res, true);
             }
         } catch (error) {
+
+            log(`[${profile.username}] Erro ao sincronizar: ${describeApiError(error)}`, true);
+
             log(`[${profile.username}] Erro ao sincronizar: ${error.message}`, true);
+
         }
 
         if (i !== profiles.length - 1) {
@@ -368,8 +517,9 @@ async function syncWithRep4rep(client) {
     try {
         steamProfiles = await api.getSteamProfiles();
     } catch (error) {
-        console.error("Error retrieving steamProfiles:", error);
-        return `Error retrieving steamProfiles: ${error.message}`;
+        const message = describeApiError(error);
+        log(`Error retrieving steamProfiles: ${message}`);
+        return `Error retrieving steamProfiles: ${message}`;
     }
 
     if (!Array.isArray(steamProfiles)) {
@@ -384,8 +534,9 @@ async function syncWithRep4rep(client) {
         try {
             res = await api.addSteamProfile(steamId);
         } catch (error) {
-            console.error("Error adding steamProfile:", error);
-            return `Error adding steamProfile: ${error.message}`;
+            const message = describeApiError(error);
+            log(`Error adding steamProfile: ${message}`);
+            return `Error adding steamProfile: ${message}`;
         }
         if (res.error) {
             return res.error;
@@ -513,8 +664,13 @@ async function promptForCode(username, client) {
 // src/util.cjs
 
 async function addProfilesFromFile() {
-    const accounts = fs.readFileSync('accounts.txt', 'utf-8').split('\n').filter(Boolean);
-    let accountCount = accounts.length;
+    const accounts = readAccountsFile();
+    const accountCount = accounts.length;
+    if (accountCount === 0) {
+        log('Nenhuma conta encontrada para adicionar.', true);
+        return;
+    }
+
     log(`Starting to add ${accountCount} profiles from file.`);
 
     for (const [index, account] of accounts.entries()) {
@@ -549,13 +705,18 @@ async function removeFromRep4Rep(steamId) {
         await api.removeSteamProfile(steamId);
         log(`[Rep4Rep] Removed steamId: ${steamId}`);
     } catch (err) {
-        log(`[ERROR] Failed to remove from Rep4Rep: ${err.message}`);
+        log(`[ERROR] Failed to remove from Rep4Rep: ${describeApiError(err)}`);
     }
 }
 
 async function addProfilesAndRun() {
-    const accounts = fs.readFileSync('accounts.txt', 'utf-8').split('\n').filter(Boolean);
-    let accountCount = accounts.length;
+    const accounts = readAccountsFile();
+    const accountCount = accounts.length;
+    if (accountCount === 0) {
+        log('Nenhuma conta encontrada para adicionar e executar.', true);
+        return;
+    }
+
     log(`Starting to add and run ${accountCount} profiles from file.`);
 
     for (const [index, account] of accounts.entries()) {
@@ -599,7 +760,11 @@ async function checkAndSyncProfiles() {
                 log(`[${profile.username}] Failed to sync: ${res}`);
             }
         } catch (error) {
+
+            log(`[${profile.username}] Erro ao sincronizar: ${describeApiError(error)}`);
+
             log(`[${profile.username}] Erro ao sincronizar: ${error.message}`);
+
         }
     }
     log('Check and sync completed');
@@ -648,7 +813,7 @@ async function exportProfilesToCSV() {
 
 async function clearInvalidAccounts() {
     const date = new Date().toISOString().split('T')[0];
-    const logFile = path.join(__dirname, '..', 'logs', `invalid-${date}.log`);
+    const logFile = path.join(LOGS_DIR, `invalid-${date}.log`);
     if (!fs.existsSync(logFile)) return log('Nenhum arquivo de inválidos encontrado.');
     const lines = fs.readFileSync(logFile, 'utf-8').split('\n').filter(Boolean);
     for (const line of lines) {
