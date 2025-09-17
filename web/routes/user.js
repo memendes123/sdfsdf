@@ -5,13 +5,27 @@ const userStore = require('../services/userStore');
 const { collectUsageStats, describeApiError } = require('../../src/util.cjs');
 const rep4repApi = require('../../src/api.cjs');
 const runQueue = require('../../src/runQueue.cjs');
-const {
-  autoRun,
-  collectUsageStats,
-  removeRemoteProfiles,
-  describeApiError,
-} = require('../../src/util.cjs');
-const rep4repApi = require('../../src/api.cjs');
+
+const DEFAULT_MAX_COMMENTS = 1000;
+const DEFAULT_ACCOUNT_LIMIT = 100;
+const ALLOWED_COMMANDS = new Set(['autoRun', 'stats']);
+
+function sanitizeOptionalLimit(value, fallback, max) {
+  if (value === undefined || value === null) {
+    return fallback;
+  }
+
+  if (typeof value === 'string' && value.trim() === '') {
+    return fallback;
+  }
+
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) {
+    return fallback;
+  }
+
+  return Math.max(1, Math.min(max, Math.floor(num)));
+}
 
 function extractAuth(req) {
   const authHeader = req.header('authorization');
@@ -72,6 +86,7 @@ router.post('/login', async (req, res) => {
         discordId: user.discordId,
         rep4repId: user.rep4repId,
         rep4repKey: user.rep4repKey,
+        discordWebhookUrl: user.discordWebhookUrl,
         phoneNumber: user.phoneNumber,
         dateOfBirth: user.dateOfBirth,
       },
@@ -111,6 +126,7 @@ router.get('/me', async (req, res) => {
       discordId: user.discordId,
       rep4repId: user.rep4repId,
       rep4repKey: user.rep4repKey,
+      discordWebhookUrl: user.discordWebhookUrl,
       phoneNumber: user.phoneNumber,
       dateOfBirth: user.dateOfBirth,
       lastLoginAt: user.lastLoginAt,
@@ -119,23 +135,27 @@ router.get('/me', async (req, res) => {
 });
 
 router.patch('/me', async (req, res) => {
-  const { rep4repKey } = req.body || {};
-  if (rep4repKey === undefined) {
+  const { rep4repKey, discordWebhookUrl } = req.body || {};
+  if (rep4repKey === undefined && discordWebhookUrl === undefined) {
     return res.status(400).json({ success: false, error: 'Nada para atualizar.' });
   }
 
   try {
-    const updated = await userStore.updateRep4repKey(req.user.id, rep4repKey);
-    res.json({ success: true, user: { ...updated, apiToken: undefined } });
+    const updated = await userStore.updateClientSettings(req.user.id, {
+      rep4repKey,
+      discordWebhookUrl,
+    });
+    const { apiToken, ...safeUser } = updated || {};
+    res.json({ success: true, user: safeUser });
   } catch (error) {
     res.status(400).json({ success: false, error: error.message });
   }
 });
 
 router.post('/run', async (req, res) => {
-  const { command = 'autoRun' } = req.body || {};
-  const allowedCommands = new Set(['autoRun', 'stats']);
-  if (!allowedCommands.has(command)) {
+  const { command = 'autoRun', maxCommentsPerAccount, accountLimit } = req.body || {};
+
+  if (!ALLOWED_COMMANDS.has(command)) {
     return res.status(400).json({ success: false, error: 'Comando não permitido para usuários.' });
   }
 
@@ -173,76 +193,43 @@ router.post('/run', async (req, res) => {
     return res.status(400).json({
       success: false,
       error: 'Nenhum perfil Rep4Rep encontrado. Adicione contas antes de executar o comando.',
-  try {
-    remoteProfiles = await rep4repApi.getSteamProfiles({ token: req.user.rep4repKey });
-  } catch (error) {
-    return res.status(502).json({ success: false, error: describeApiError(error) });
-  }
-
-  if (!Array.isArray(remoteProfiles) || remoteProfiles.length === 0) {
-    return res.status(400).json({
-      success: false,
-      error: 'Nenhum perfil Rep4Rep encontrado. Adicione contas antes de executar o comando.',
     });
   }
 
-  const creditLimit = isAdmin ? Infinity : req.user.credits;
-  let usedCredits = 0;
-
-  try {
-    const summary = await autoRun({
-      apiToken: req.user.rep4repKey,
-      maxCommentsPerAccount: 1000,
-      accountLimit: 100,
-      onTaskComplete: () => {
-        if (isAdmin) {
-          return true;
-        }
-        usedCredits += 1;
-        return usedCredits < creditLimit;
-      },
-    });
-  }
+  const sanitizedMax = sanitizeOptionalLimit(maxCommentsPerAccount, DEFAULT_MAX_COMMENTS, 1000);
+  const sanitizedAccounts = sanitizeOptionalLimit(accountLimit, DEFAULT_ACCOUNT_LIMIT, 100);
 
   try {
     const enqueue = await runQueue.enqueueJob({
       userId: req.user.id,
       command: 'autoRun',
-      maxCommentsPerAccount: 1000,
-      accountLimit: 100,
+      maxCommentsPerAccount: sanitizedMax,
+      accountLimit: sanitizedAccounts,
     });
 
     const queueStatus = await runQueue.getUserQueueStatus(req.user.id);
-    res.json({
+    return res.json({
       success: true,
       message: enqueue.alreadyQueued
         ? 'Você já possui uma execução aguardando processamento. Acompanhe sua posição na fila.'
         : 'Pedido adicionado à fila com sucesso. Aguarde a sua vez para começar.',
       queue: queueStatus,
-    const consumed = isAdmin
-      ? summary.totalComments ?? 0
-      : Math.min(summary.totalComments ?? usedCredits, creditLimit);
-    let updatedUser = req.user;
-    if (!isAdmin && consumed > 0) {
-      updatedUser = await userStore.consumeCredits(req.user.id, consumed);
-    }
-
-    const cleanup = await removeRemoteProfiles(summary, {
-      apiClient: rep4repApi,
-      apiToken: req.user.rep4repKey,
-    });
-
-    res.json({
-      success: true,
-      message: 'Execução concluída.',
-      summary,
-      creditsConsumed: consumed,
-      remainingCredits: updatedUser.credits,
-      cleanup,
+      effectiveMaxCommentsPerAccount: sanitizedMax,
+      effectiveAccountLimit: sanitizedAccounts,
+      overrides: {
+        requested: {
+          maxCommentsPerAccount: maxCommentsPerAccount ?? null,
+          accountLimit: accountLimit ?? null,
+        },
+        applied: {
+          maxCommentsPerAccount: sanitizedMax,
+          accountLimit: sanitizedAccounts,
+        },
+      },
     });
   } catch (error) {
     console.error('[API usuário] Falha ao enfileirar execução:', error);
-    res.status(500).json({ success: false, error: error.message });
+    return res.status(500).json({ success: false, error: error.message });
   }
 });
 
