@@ -1,7 +1,6 @@
 const { fork } = require('child_process');
 const path = require('path');
 const minimist = require('minimist');
-
 const open = require('open');
 
 const args = minimist(process.argv.slice(2), {
