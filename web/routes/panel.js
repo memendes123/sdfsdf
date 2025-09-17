@@ -7,7 +7,7 @@ const path = require('path');
 const auth = require('../auth');
 const userStore = require('../services/userStore');
 const {
-  autoRun,
+  prioritizedAutoRun,
   collectUsageStats,
   backupDatabase,
   describeApiError,
@@ -91,8 +91,18 @@ router.post('/api/run', async (req, res) => {
 
   const handlers = {
     autoRun: async () => {
-      const summary = await autoRun();
-      return { message: '✅ autoRun concluído. Verifique os logs para detalhes.', summary };
+      const adminUser = await userStore.findActiveAdmin();
+      if (!adminUser || !adminUser.rep4repKey) {
+        throw new Error('Configure a chave Rep4Rep no perfil admin antes de executar.');
+      }
+
+      const summary = await prioritizedAutoRun({
+        ownerToken: adminUser.rep4repKey,
+        accountLimit: 100,
+        maxCommentsPerAccount: 1000,
+        clientFilter: (user) => user.role !== 'admin',
+      });
+      return { message: '✅ Execução concluída com prioridade.', summary };
     },
     stats: async () => {
       const stats = await collectUsageStats();

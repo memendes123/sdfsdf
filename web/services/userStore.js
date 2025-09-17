@@ -15,14 +15,11 @@ const PASSWORD_KEYLEN = 64;
 const PASSWORD_DIGEST = 'sha512';
 
 function generateApiToken() {
-  return randomUUID().replace(/-/g, '') + randomUUID().replace(/-/g, '');
+  return randomUUID().replace(/-/g, '');
 }
 
 function normalizeString(value) {
-  if (typeof value !== 'string') {
-    return '';
-  }
-  return value.trim();
+  return typeof value === 'string' ? value.trim() : '';
 }
 
 function normalizeEmail(email) {
@@ -84,95 +81,26 @@ async function verifyPassword(password, storedHash, storedSalt) {
   if (!storedHash || !storedSalt) {
     return false;
   }
-  try {
-    const derived = await pbkdf2Async(
-      normalizeString(password),
-      storedSalt,
-      PASSWORD_ITERATIONS,
-      PASSWORD_KEYLEN,
-      PASSWORD_DIGEST,
-    );
-    const derivedHex = derived.toString('hex');
-    return (
-      derivedHex.length === storedHash.length &&
-      timingSafeEqual(Buffer.from(derivedHex, 'hex'), Buffer.from(storedHash, 'hex'))
-    );
-function generateApiToken() {
-  return randomUUID().replace(/-/g, '');
-}
 
-async function ensureDataFile() {
-  await fs.mkdir(DATA_DIR, { recursive: true });
-  try {
-    await fs.access(USERS_FILE);
-  } catch (error) {
-    const now = new Date().toISOString();
-    const seed = [
-      {
-        id: 'demo-user',
-        displayName: 'Cliente Demo',
-        email: 'demo@example.com',
-        rep4repKey: '',
-        credits: 10,
-        status: 'active',
-        role: 'customer',
-        notes: 'Exemplo de usuário. Pode ser removido com segurança.',
-        apiToken: generateApiToken(),
-        createdAt: now,
-        updatedAt: now,
-      },
-    ];
-    await fs.writeFile(USERS_FILE, JSON.stringify(seed, null, 2), 'utf8');
-  }
-}
-
-async function readUsers() {
-  await ensureDataFile();
-  const raw = await fs.readFile(USERS_FILE, 'utf8');
-  try {
-    const data = JSON.parse(raw);
-    if (!Array.isArray(data)) {
-      return [];
-    }
-
-    let mutated = false;
-    const normalized = data.map((user) => {
-      const next = { ...user };
-      if (!next.id) {
-        next.id = randomUUID();
-        mutated = true;
-      }
-      if (!next.role) {
-        next.role = 'customer';
-        mutated = true;
-      }
-      if (!next.status) {
-        next.status = 'active';
-        mutated = true;
-      }
-      if (typeof next.credits !== 'number') {
-        next.credits = 0;
-        mutated = true;
-      }
-      if (!next.apiToken) {
-        next.apiToken = generateApiToken();
-        mutated = true;
-      }
-      return next;
-    });
-
-    if (mutated) {
-      await fs.writeFile(USERS_FILE, JSON.stringify(normalized, null, 2), 'utf8');
-    }
-
-    return normalized;
-  } catch (error) {
-    return false;
-  }
+  const derived = await pbkdf2Async(
+    normalizeString(password),
+    storedSalt,
+    PASSWORD_ITERATIONS,
+    PASSWORD_KEYLEN,
+    PASSWORD_DIGEST,
+  );
+  const derivedHex = derived.toString('hex');
+  return (
+    derivedHex.length === storedHash.length &&
+    timingSafeEqual(Buffer.from(derivedHex, 'hex'), Buffer.from(storedHash, 'hex'))
+  );
 }
 
 function sanitizeUser(row) {
-  if (!row) return null;
+  if (!row) {
+    return null;
+  }
+
   return {
     id: row.id,
     username: row.username,
@@ -205,7 +133,6 @@ async function migrateLegacyFile(connection) {
     const raw = await fs.readFile(LEGACY_FILE, 'utf8');
     const legacyUsers = JSON.parse(raw);
     if (!Array.isArray(legacyUsers) || legacyUsers.length === 0) {
-      await fs.rename(LEGACY_FILE, `${LEGACY_FILE}.bak`);
       return;
     }
 
@@ -221,7 +148,7 @@ async function migrateLegacyFile(connection) {
         const phoneNumber = normalizePhone(legacy.phoneNumber || '+550000000000');
         const { hash, salt } = await hashPassword(legacy.password || 'Alterar123');
         const apiToken = generateApiToken();
-        const credits = Number.isFinite(legacy.credits) ? legacy.credits : 0;
+        const credits = Number.isFinite(legacy.credits) ? Math.max(0, Math.round(legacy.credits)) : 0;
 
         await connection.run(
           `INSERT OR IGNORE INTO app_user (
@@ -254,20 +181,30 @@ async function migrateLegacyFile(connection) {
       }
     }
 
-    await fs.rename(LEGACY_FILE, `${LEGACY_FILE}.bak`);
-    console.log('[UserStore] Migração concluída. Arquivo legacy renomeado para users.json.bak');
+    console.log('[UserStore] Migração concluída. Mantendo arquivo users.json para referência.');
   } catch (error) {
     console.error('[UserStore] Não foi possível migrar users.json:', error);
   }
 }
 
+let ensurePromise = null;
+
 async function ensureDataFile() {
   await fs.mkdir(DATA_DIR, { recursive: true });
-  const connection = await db.getConnection();
-  await migrateLegacyFile(connection);
+  if (!ensurePromise) {
+    ensurePromise = (async () => {
+      const connection = await db.getConnection();
+      await migrateLegacyFile(connection);
+    })().catch((error) => {
+      ensurePromise = null;
+      throw error;
+    });
+  }
+  return ensurePromise;
 }
 
 async function listUsers() {
+  await ensureDataFile();
   const connection = await db.getConnection();
   const rows = await connection.all(`SELECT * FROM app_user ORDER BY datetime(createdAt) DESC`);
   return rows.map(sanitizeUser);
@@ -275,6 +212,7 @@ async function listUsers() {
 
 async function getUser(id) {
   if (!id) return null;
+  await ensureDataFile();
   const connection = await db.getConnection();
   const row = await connection.get(`SELECT * FROM app_user WHERE id = ?`, [id]);
   return sanitizeUser(row);
@@ -282,6 +220,7 @@ async function getUser(id) {
 
 async function getUserByEmail(email) {
   const value = normalizeEmail(email);
+  await ensureDataFile();
   const connection = await db.getConnection();
   const row = await connection.get(`SELECT * FROM app_user WHERE lower(email) = ?`, [value]);
   return row ? sanitizeUser(row) : null;
@@ -289,6 +228,7 @@ async function getUserByEmail(email) {
 
 async function getRawUserByEmail(email) {
   const value = normalizeEmail(email);
+  await ensureDataFile();
   const connection = await db.getConnection();
   return connection.get(`SELECT * FROM app_user WHERE lower(email) = ?`, [value]);
 }
@@ -296,6 +236,7 @@ async function getRawUserByEmail(email) {
 async function getRawUserByUsername(username) {
   const value = normalizeString(username).toLowerCase();
   if (!value) return null;
+  await ensureDataFile();
   const connection = await db.getConnection();
   return connection.get(`SELECT * FROM app_user WHERE lower(username) = ?`, [value]);
 }
@@ -304,20 +245,21 @@ async function assertUniqueFields({ email, username, discordId, rep4repId }, { i
   const connection = await db.getConnection();
   const clauses = [];
   const params = [];
+
   if (email) {
-    clauses.push(`lower(email) = ?`);
+    clauses.push('lower(email) = ?');
     params.push(email.toLowerCase());
   }
   if (username) {
-    clauses.push(`lower(username) = ?`);
+    clauses.push('lower(username) = ?');
     params.push(username.toLowerCase());
   }
   if (discordId) {
-    clauses.push(`discordId = ?`);
+    clauses.push('discordId = ?');
     params.push(discordId);
   }
   if (rep4repId) {
-    clauses.push(`lower(rep4repId) = ?`);
+    clauses.push('lower(rep4repId) = ?');
     params.push(rep4repId.toLowerCase());
   }
 
@@ -346,6 +288,8 @@ async function assertUniqueFields({ email, username, discordId, rep4repId }, { i
 }
 
 async function createUserRecord(data, { defaultStatus = 'pending' } = {}) {
+  await ensureDataFile();
+
   const username = requireString(data.username, 'Informe um username.');
   const fullName = requireString(data.fullName || data.displayName, 'Informe o nome completo.');
   const email = normalizeEmail(data.email);
@@ -369,19 +313,6 @@ async function createUserRecord(data, { defaultStatus = 'pending' } = {}) {
   const now = new Date().toISOString();
   const id = randomUUID();
   const apiToken = generateApiToken();
-  const user = {
-    id: randomUUID(),
-    displayName: name,
-    email: mail,
-    rep4repKey: normalizeString(rep4repKey),
-    credits: normalizeCredits(credits),
-    status: 'active',
-    role: 'customer',
-    notes: normalizeString(notes),
-    apiToken: generateApiToken(),
-    createdAt: now,
-    updatedAt: now,
-  };
 
   await connection.run(
     `INSERT INTO app_user (
@@ -423,6 +354,7 @@ async function registerUser(data = {}) {
 }
 
 async function updateUser(id, updates = {}) {
+  await ensureDataFile();
   const connection = await db.getConnection();
   const current = await connection.get(`SELECT * FROM app_user WHERE id = ?`, [id]);
   if (!current) {
@@ -476,7 +408,6 @@ async function updateUser(id, updates = {}) {
     const { hash, salt } = await hashPassword(updates.password);
     next.passwordHash = hash;
     next.passwordSalt = salt;
-
   }
 
   await assertUniqueFields(
@@ -536,6 +467,7 @@ async function adjustCredits(id, delta) {
     throw new Error('Informe um valor numérico para ajustar créditos.');
   }
 
+  await ensureDataFile();
   const connection = await db.getConnection();
   const current = await connection.get(`SELECT * FROM app_user WHERE id = ?`, [id]);
   if (!current) {
@@ -558,6 +490,7 @@ async function consumeCredits(id, amount = 1) {
     return getUser(id);
   }
 
+  await ensureDataFile();
   const connection = await db.getConnection();
   const current = await connection.get(`SELECT * FROM app_user WHERE id = ?`, [id]);
   if (!current) {
@@ -582,6 +515,7 @@ async function authenticateUser({ userId, token }) {
     return null;
   }
 
+  await ensureDataFile();
   const connection = await db.getConnection();
   const user = await connection.get(`SELECT * FROM app_user WHERE id = ?`, [userId]);
   if (!user) {
@@ -600,6 +534,7 @@ async function authenticateUser({ userId, token }) {
 }
 
 async function rotateApiToken(id) {
+  await ensureDataFile();
   const connection = await db.getConnection();
   const current = await connection.get(`SELECT * FROM app_user WHERE id = ?`, [id]);
   if (!current) {
@@ -618,6 +553,7 @@ async function loginUser({ identifier, password }) {
     throw new Error('Informe email ou username para entrar.');
   }
 
+  await ensureDataFile();
   const connection = await db.getConnection();
   const row = await connection.get(
     `SELECT * FROM app_user WHERE lower(email) = ? OR lower(username) = ?`,
@@ -639,6 +575,7 @@ async function loginUser({ identifier, password }) {
 }
 
 async function updateRep4repKey(id, rep4repKey) {
+  await ensureDataFile();
   const connection = await db.getConnection();
   const current = await connection.get(`SELECT * FROM app_user WHERE id = ?`, [id]);
   if (!current) {
@@ -649,83 +586,15 @@ async function updateRep4repKey(id, rep4repKey) {
   const updatedAt = new Date().toISOString();
   await connection.run(`UPDATE app_user SET rep4repKey = ?, updatedAt = ? WHERE id = ?`, [key, updatedAt, id]);
   return sanitizeUser({ ...current, rep4repKey: key, updatedAt });
-  const nextCredits = current.credits + Math.round(amount);
-  if (nextCredits < 0) {
-    throw new Error('Créditos insuficientes para remover.');
-  }
-
-  const credits = normalizeCredits(nextCredits);
-  const updated = { ...current, credits, updatedAt: new Date().toISOString() };
-  users[index] = updated;
-  await writeUsers(users);
-  return updated;
 }
 
-async function consumeCredits(id, amount = 1) {
-  const qty = Math.max(0, Math.floor(Number(amount)));
-  if (qty <= 0) {
-    return getUser(id);
-  }
-
-  const users = await readUsers();
-  const index = users.findIndex((user) => user.id === id);
-  if (index === -1) {
-    throw new Error('Usuário não encontrado.');
-  }
-
-  const current = users[index];
-  if (current.credits < qty) {
-    throw new Error('Créditos insuficientes.');
-  }
-
-  const updated = {
-    ...current,
-    credits: current.credits - qty,
-    updatedAt: new Date().toISOString(),
-  };
-  users[index] = updated;
-  await writeUsers(users);
-  return updated;
-}
-
-async function rotateApiToken(id) {
-  const users = await readUsers();
-  const index = users.findIndex((user) => user.id === id);
-  if (index === -1) {
-    throw new Error('Usuário não encontrado.');
-  }
-
-  const updated = {
-    ...users[index],
-    apiToken: generateApiToken(),
-    updatedAt: new Date().toISOString(),
-  };
-
-  users[index] = updated;
-  await writeUsers(users);
-  return updated;
-}
-
-async function authenticateUser({ userId, token }) {
-  if (!userId || !token) {
-    return null;
-  }
-
-  const users = await readUsers();
-  const user = users.find((item) => item.id === userId);
-  if (!user) {
-    return null;
-  }
-
-  if (user.status !== 'active') {
-    return null;
-  }
-
-  if (user.apiToken !== token) {
-    return null;
-  }
-
-  return user;
+async function findActiveAdmin() {
+  await ensureDataFile();
+  const connection = await db.getConnection();
+  const row = await connection.get(
+    `SELECT * FROM app_user WHERE role = 'admin' AND status = 'active' ORDER BY datetime(updatedAt) DESC LIMIT 1`,
+  );
+  return sanitizeUser(row);
 }
 
 module.exports = {
@@ -742,5 +611,6 @@ module.exports = {
   rotateApiToken,
   loginUser,
   updateRep4repKey,
-
+  findActiveAdmin,
 };
+
