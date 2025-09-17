@@ -5,6 +5,7 @@ const fetchFn = globalThis.fetch
   ? (...args) => globalThis.fetch(...args)
   : (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
+
 class ApiError extends Error {
   constructor(message, { status, payload } = {}) {
     super(message);
@@ -203,6 +204,13 @@ class ApiWrapper {
     return this.request("user/steamprofiles/remove", {
       method: "POST",
       form: { steamProfile: steamId },
+    });
+  }
+
+  async removeSteamProfile(steamId) {
+    return await this.fetchWithJsonCheck(`${this.url}/user/steamprofiles/remove`, {
+      method: "POST",
+      body: this.buildForm({ steamProfile: steamId }),
     });
   }
 

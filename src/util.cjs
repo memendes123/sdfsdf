@@ -14,6 +14,7 @@ const ROOT_DIR = path.join(__dirname, '..');
 const ACCOUNTS_PATH = path.join(ROOT_DIR, 'accounts.txt');
 const LOGS_DIR = path.join(ROOT_DIR, 'logs');
 
+
 let rl = null;
 
 function getReadline() {
@@ -62,6 +63,7 @@ function logInvalidAccount(username, reason) {
 }
 
 function removeFromAccountsFile(username) {
+
     if (!fs.existsSync(ACCOUNTS_PATH)) {
         return;
     }
@@ -94,6 +96,35 @@ function describeApiError(error) {
         return `${error.message}${suffix}${status}`;
     }
     return error?.message || String(error);
+}
+
+function parseStoredCookies(rawCookies, username) {
+    if (!rawCookies) {
+        return [];
+    }
+
+    if (typeof rawCookies === 'string') {
+        try {
+            const parsed = JSON.parse(rawCookies);
+            return Array.isArray(parsed) ? parsed : [];
+        } catch (error) {
+            if (username) {
+                log(`[${username}] Failed to parse stored cookies. Ignorando cookies salvos.`);
+            }
+            return [];
+        }
+    }
+
+    return Array.isArray(rawCookies) ? rawCookies : [];
+
+    const filePath = path.join(__dirname, '..', 'accounts.txt');
+    if (!fs.existsSync(filePath)) {
+        return;
+    }
+    const lines = fs.readFileSync(filePath, 'utf-8').split('\n');
+    const filtered = lines.filter(line => !line.startsWith(username + ':'));
+    fs.writeFileSync(filePath, filtered.join('\n'));
+
 }
 
 function parseStoredCookies(rawCookies, username) {
@@ -464,7 +495,11 @@ async function authAllProfiles() {
                 log(res, true);
             }
         } catch (error) {
+
             log(`[${profile.username}] Erro ao sincronizar: ${describeApiError(error)}`, true);
+
+            log(`[${profile.username}] Erro ao sincronizar: ${error.message}`, true);
+
         }
 
         if (i !== profiles.length - 1) {
@@ -725,7 +760,11 @@ async function checkAndSyncProfiles() {
                 log(`[${profile.username}] Failed to sync: ${res}`);
             }
         } catch (error) {
+
             log(`[${profile.username}] Erro ao sincronizar: ${describeApiError(error)}`);
+
+            log(`[${profile.username}] Erro ao sincronizar: ${error.message}`);
+
         }
     }
     log('Check and sync completed');
