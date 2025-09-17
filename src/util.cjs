@@ -935,8 +935,7 @@ async function prioritizedAutoRun(options = {}) {
       const summary = await autoRun({ ...baseRunOptions, apiToken: ownerToken });
       result.owner = summary;
       if (summary.totalComments > 0) {
-        log('Pedidos do proprietário atendidos. Clientes serão processados posteriormente.');
-        return result;
+        log('Pedidos do proprietário atendidos. Continuando com a fila de clientes.');
       }
     } catch (error) {
       log(`❌ Falha ao executar autoRun prioritário: ${error.message}`);

@@ -9,6 +9,22 @@ const runQueue = require('../../src/runQueue.cjs');
 const DEFAULT_MAX_COMMENTS = 1000;
 const DEFAULT_ACCOUNT_LIMIT = 100;
 const ALLOWED_COMMANDS = new Set(['autoRun', 'stats']);
+function sanitizeOptionalLimit(value, fallback, max) {
+  if (value === undefined || value === null) {
+    return fallback;
+  }
+
+  if (typeof value === 'string' && value.trim() === '') {
+    return fallback;
+  }
+
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) {
+    return fallback;
+  }
+
+  return Math.max(1, Math.min(max, Math.floor(num)));
+}
 
 function extractAuth(req) {
   const authHeader = req.header('authorization');
@@ -173,6 +189,8 @@ router.post('/run', async (req, res) => {
     });
   }
 
+  const sanitizedMax = sanitizeOptionalLimit(maxCommentsPerAccount, DEFAULT_MAX_COMMENTS, 1000);
+  const sanitizedAccounts = sanitizeOptionalLimit(accountLimit, DEFAULT_ACCOUNT_LIMIT, 100);
   const sanitizedMax = Number.isFinite(Number(maxCommentsPerAccount))
     ? Math.max(1, Math.min(1000, Math.floor(Number(maxCommentsPerAccount))))
     : DEFAULT_MAX_COMMENTS;
