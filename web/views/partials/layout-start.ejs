@@ -29,13 +29,13 @@
                     <a href="<%= baseHref %>/" class="app-nav__link <%= page === 'dashboard' ? 'is-active' : '' %>">Dashboard</a>
                     <a href="<%= baseHref %>/logs" class="app-nav__link <%= page === 'logs' ? 'is-active' : '' %>">Logs</a>
                 </nav>
-                <div class="language-switch" data-language-switch>
-                    <button type="button" class="btn btn--ghost" data-language-toggle aria-haspopup="true" aria-expanded="false">
-                        🌐 <span data-language-label>Português</span>
+                <div class="language-switch notranslate" data-language-switch translate="no">
+                    <button type="button" class="btn btn--ghost" data-language-toggle aria-haspopup="true" aria-expanded="false" translate="no">
+                        🌐 <span data-language-label class="notranslate" translate="no">Português</span>
                     </button>
-                    <div class="language-switch__dropdown" data-language-dropdown hidden role="menu">
-                        <button type="button" class="language-option is-active" data-language-option="pt" role="menuitemradio" aria-checked="true">Português</button>
-                        <button type="button" class="language-option" data-language-option="en" role="menuitemradio" aria-checked="false">English</button>
+                    <div class="language-switch__dropdown notranslate" data-language-dropdown hidden role="menu" translate="no">
+                        <button type="button" class="language-option is-active" data-language-option="pt" role="menuitemradio" aria-checked="true" translate="no">Português</button>
+                        <button type="button" class="language-option" data-language-option="en" role="menuitemradio" aria-checked="false" translate="no">English</button>
                     </div>
                 </div>
             </div>
