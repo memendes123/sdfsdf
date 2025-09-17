@@ -1,33 +1,48 @@
-require("dotenv").config();
-const { FormData } = require("formdata-node");
+require('dotenv').config();
+const { FormData } = require('formdata-node');
 
 const fetchFn = globalThis.fetch
   ? (...args) => globalThis.fetch(...args)
-  : (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
+  : (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 
 class ApiError extends Error {
   constructor(message, { status, payload } = {}) {
     super(message);
-    this.name = "ApiError";
+    this.name = 'ApiError';
     this.status = status ?? null;
     this.payload = payload;
   }
 }
 
 class ApiWrapper {
-  constructor() {
-    this.url = "https://rep4rep.com/pub-api/";
-    this.token = process.env.REP4REP_KEY;
-
+  constructor({ token, baseUrl } = {}) {
+    this.url = baseUrl || 'https://rep4rep.com/pub-api/';
+    this.token = token ?? process.env.REP4REP_KEY ?? null;
     if (!this.token) {
-      console.error("❌ REP4REP_KEY não está definido no .env");
-      process.exit(1);
+      console.warn('[Rep4Rep API] Token não configurado. Defina REP4REP_KEY ou forneça manualmente.');
     }
   }
 
-  buildForm(params = {}) {
+  withToken(token) {
+    return new ApiWrapper({ token, baseUrl: this.url });
+  }
+
+  setToken(token) {
+    this.token = token;
+  }
+
+  resolveToken(override) {
+    const token = override ?? this.token;
+    if (!token) {
+      throw new ApiError('Token da API Rep4Rep não definido.');
+    }
+    return token;
+  }
+
+  buildForm(params = {}, tokenOverride) {
     const form = new FormData();
-    form.set("apiToken", this.token);
+    const token = this.resolveToken(tokenOverride);
+    form.set('apiToken', token);
     for (const [key, value] of Object.entries(params)) {
       if (value === undefined || value === null) continue;
       form.set(key, value);
@@ -40,8 +55,8 @@ class ApiWrapper {
       return payload;
     }
 
-    if (payload && typeof payload === "object") {
-      const candidates = [...preferredKeys, "data", "result", "items", "records", "profiles"];
+    if (payload && typeof payload === 'object') {
+      const candidates = [...preferredKeys, 'data', 'result', 'items', 'records', 'profiles'];
       for (const key of candidates) {
         if (!key) continue;
         const value = payload[key];
@@ -55,7 +70,7 @@ class ApiWrapper {
       return [];
     }
 
-    console.warn("⚠️ [Rep4Rep API] Formato inesperado recebido ao extrair lista.", payload);
+    console.warn('⚠️ [Rep4Rep API] Formato inesperado recebido ao extrair lista.', payload);
     return [];
   }
 
@@ -69,7 +84,7 @@ class ApiWrapper {
         const response = await fetchFn(url, options);
         const text = await response.text();
 
-        let json = null;
+        let json = {};
         if (text.trim().length > 0) {
           try {
             json = JSON.parse(text);
@@ -79,8 +94,6 @@ class ApiWrapper {
               payload: text.slice(0, 200),
             });
           }
-        } else {
-          json = {};
         }
 
         if (!response.ok) {
@@ -94,15 +107,15 @@ class ApiWrapper {
           throw error;
         }
 
-        if (json && typeof json === "object") {
-          if (Object.prototype.hasOwnProperty.call(json, "success") && !json.success) {
-            throw new ApiError(json.message || json.error || "Erro retornado pela API.", {
+        if (json && typeof json === 'object') {
+          if (Object.prototype.hasOwnProperty.call(json, 'success') && !json.success) {
+            throw new ApiError(json.message || json.error || 'Erro retornado pela API.', {
               status: response.status,
               payload: json,
             });
           }
 
-          if (!Object.prototype.hasOwnProperty.call(json, "success") && json.error) {
+          if (!Object.prototype.hasOwnProperty.call(json, 'success') && json.error) {
             throw new ApiError(json.error, {
               status: response.status,
               payload: json,
@@ -115,17 +128,13 @@ class ApiWrapper {
         lastError = error instanceof Error ? error : new Error(String(error));
         const shouldRetry =
           attempt < retries - 1 &&
-          (lastError instanceof ApiError
-            ? retryStatuses.includes(lastError.status)
-            : true);
+          (lastError instanceof ApiError ? retryStatuses.includes(lastError.status) : true);
 
         if (!shouldRetry) {
           throw lastError;
         }
 
         await delay((attempt + 1) * 1000);
-
-
       }
     }
 
@@ -133,174 +142,93 @@ class ApiWrapper {
   }
 
   async request(path, {
-    method = "POST",
+    method = 'POST',
     query = {},
     form = {},
     expectsArray = false,
     listKeys = [],
+    token,
   } = {}) {
-    const attempts = method.toUpperCase() === "GET" ? [false, true] : [false];
-    let lastError = null;
+    const url = new URL(path, this.url);
+    const authToken = this.resolveToken(token);
+    const headers = {
+      Accept: 'application/json',
+      Authorization: `Bearer ${authToken}`,
+    };
 
-    for (const includeTokenInQuery of attempts) {
-      const url = new URL(path, this.url);
-      const headers = {
-        Accept: "application/json",
-      };
+    const options = { method, headers };
 
-      if (this.token) {
-        headers.Authorization = `Bearer ${this.token}`;
+    if (method.toUpperCase() === 'GET') {
+      const params = new URLSearchParams(query);
+      if (!params.has('apiToken')) {
+        params.set('apiToken', authToken);
       }
-
-      const options = {
-        method,
-        headers,
-      };
-
-      if (method.toUpperCase() === "GET") {
-        const params = new URLSearchParams(query);
-        if (includeTokenInQuery || !headers.Authorization) {
-          params.set("apiToken", this.token);
-        }
-        const search = params.toString();
-        if (search) {
-          url.search = search;
-        }
-      } else {
-        options.body = this.buildForm(form);
+      const search = params.toString();
+      if (search) {
+        url.search = search;
       }
-
-      try {
-        const payload = await this.fetchWithJsonCheck(url.toString(), options);
-        if (!expectsArray) {
-          return payload;
-        }
-        return this.extractList(payload, listKeys);
-      } catch (error) {
-        lastError = error;
-        if (
-          method.toUpperCase() === "GET" &&
-          !includeTokenInQuery &&
-          error instanceof ApiError &&
-          [401, 403].includes(error.status)
-        ) {
-          continue;
-        }
-
-        throw error;
-      }
+    } else {
+      options.body = this.buildForm(form, authToken);
     }
 
-    throw lastError;
-  }
-
-  async request(path, {
-    method = "POST",
-    query = {},
-    form = {},
-    expectsArray = false,
-    listKeys = [],
-  } = {}) {
-    const attempts = method.toUpperCase() === "GET" ? [false, true] : [false];
-    let lastError = null;
-
-    for (const includeTokenInQuery of attempts) {
-      const url = new URL(path, this.url);
-      const headers = {
-        Accept: "application/json",
-      };
-
-      if (this.token) {
-        headers.Authorization = `Bearer ${this.token}`;
-      }
-
-      const options = {
-        method,
-        headers,
-      };
-
-      if (method.toUpperCase() === "GET") {
-        const params = new URLSearchParams(query);
-        if (includeTokenInQuery || !headers.Authorization) {
-          params.set("apiToken", this.token);
-        }
-        const search = params.toString();
-        if (search) {
-          url.search = search;
-        }
-      } else {
-        options.body = this.buildForm(form);
-      }
-
-      try {
-        const payload = await this.fetchWithJsonCheck(url.toString(), options);
-        if (!expectsArray) {
-          return payload;
-        }
-        return this.extractList(payload, listKeys);
-      } catch (error) {
-        lastError = error;
-        if (
-          method.toUpperCase() === "GET" &&
-          !includeTokenInQuery &&
-          error instanceof ApiError &&
-          [401, 403].includes(error.status)
-        ) {
-          continue;
-        }
-
-        throw error;
-      }
+    const payload = await this.fetchWithJsonCheck(url.toString(), options);
+    if (!expectsArray) {
+      return payload;
     }
-
-    throw lastError;
+    return this.extractList(payload, listKeys);
   }
 
-  async addSteamProfile(steamId) {
-    return this.request("user/steamprofiles/add", {
-      method: "POST",
+  async addSteamProfile(steamId, options = {}) {
+    return this.request('user/steamprofiles/add', {
+      method: 'POST',
       form: { steamProfile: steamId },
+      token: options.token,
     });
   }
 
-  async removeSteamProfile(steamId) {
-    return this.request("user/steamprofiles/remove", {
-      method: "POST",
+  async removeSteamProfile(steamId, options = {}) {
+    return this.request('user/steamprofiles/remove', {
+      method: 'POST',
       form: { steamProfile: steamId },
+      token: options.token,
     });
   }
 
-  async getSteamProfiles() {
-    return this.request("user/steamprofiles", {
-      method: "GET",
+  async getSteamProfiles(options = {}) {
+    return this.request('user/steamprofiles', {
+      method: 'GET',
       expectsArray: true,
-      listKeys: ["steamProfiles"],
+      listKeys: ['steamProfiles'],
+      token: options.token,
     });
   }
 
-  async getTasks(r4rSteamId) {
-    return this.request("tasks", {
-      method: "GET",
-      query: { steamProfile: r4rSteamId },
+  async getTasks(steamProfileId, options = {}) {
+    return this.request('tasks', {
+      method: 'GET',
+      query: { steamProfile: steamProfileId },
       expectsArray: true,
-      listKeys: ["tasks"],
+      listKeys: ['tasks'],
+      token: options.token,
     });
   }
 
-  async completeTask(taskId, commentId, authorSteamProfileId) {
-    return this.request("tasks/complete", {
-      method: "POST",
+  async completeTask(taskId, commentId, authorSteamProfileId, options = {}) {
+    return this.request('tasks/complete', {
+      method: 'POST',
       form: {
         taskId,
         commentId,
         authorSteamProfileId,
       },
+      token: options.token,
     });
   }
 }
 
-const apiInstance = new ApiWrapper();
+const defaultApi = new ApiWrapper();
 
-module.exports = apiInstance; // exporta instância pronta
-module.exports.ApiWrapper = ApiWrapper; // opcional: útil para mocks e testes
+module.exports = defaultApi;
+module.exports.ApiWrapper = ApiWrapper;
 module.exports.ApiError = ApiError;
+module.exports.createApiClient = (token) => new ApiWrapper({ token });
