@@ -192,6 +192,20 @@
           outputEl.textContent = `${message}\n\n${JSON.stringify(data.stats, null, 2)}`;
         } else if (data.filePath) {
           outputEl.textContent = `${message}\nArquivo salvo em: ${data.filePath}`;
+        } else if (data.summary) {
+          const perAccount = Array.isArray(data.summary.perAccount)
+            ? data.summary.perAccount
+            : [];
+          const lines = [
+            message,
+            '',
+            `Total de comentários: ${data.summary.totalComments ?? 0}`,
+          ];
+          perAccount.forEach((item) => {
+            const suffix = item.stoppedEarly ? ' (limite atingido)' : '';
+            lines.push(`- ${item.username || 'desconhecido'}: ${item.comments ?? 0}${suffix}`);
+          });
+          outputEl.textContent = lines.join('\n');
         } else {
           outputEl.textContent = message;
         }
