@@ -17,6 +17,7 @@ app.locals.siteName = 'Rep4Rep Control Center';
 app.use('/api/user', userRouter);
 app.use('/admin', panelRouter);
 app.use('/', clientRouter);
+app.use('/', panelRouter);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🌐 Painel rodando em http://localhost:${PORT}`));

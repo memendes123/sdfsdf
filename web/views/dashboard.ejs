@@ -9,6 +9,7 @@
             <a class="btn btn--ghost" href="<%= base %>/logs">📜 Ver logs</a>
         </div>
             <p class="hero__hint">Dica: configure o arquivo <code>accounts.txt</code>, mantenha o bot do terminal rodando com a sua key e libere créditos apenas após validar os dados do cliente.</p>
+        <p class="hero__hint">Dica: configure o arquivo <code>accounts.txt</code> e garanta que o <code>REP4REP_KEY</code> está definido antes de rodar as automações.</p>
     </div>
     <aside class="hero__card">
         <h2>Resumo rápido</h2>
@@ -152,6 +153,7 @@
                                         <% if (user.phoneNumber) { %>
                                             <span class="badge badge--muted"><%= user.phoneNumber %></span>
                                         <% } %>
+
                                         <% if (user.rep4repKey) { %>
                                             <span class="badge">Key definida</span>
                                         <% } else { %>

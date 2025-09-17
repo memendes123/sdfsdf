@@ -97,6 +97,75 @@ async function verifyPassword(password, storedHash, storedSalt) {
       derivedHex.length === storedHash.length &&
       timingSafeEqual(Buffer.from(derivedHex, 'hex'), Buffer.from(storedHash, 'hex'))
     );
+function generateApiToken() {
+  return randomUUID().replace(/-/g, '');
+}
+
+async function ensureDataFile() {
+  await fs.mkdir(DATA_DIR, { recursive: true });
+  try {
+    await fs.access(USERS_FILE);
+  } catch (error) {
+    const now = new Date().toISOString();
+    const seed = [
+      {
+        id: 'demo-user',
+        displayName: 'Cliente Demo',
+        email: 'demo@example.com',
+        rep4repKey: '',
+        credits: 10,
+        status: 'active',
+        role: 'customer',
+        notes: 'Exemplo de usuário. Pode ser removido com segurança.',
+        apiToken: generateApiToken(),
+        createdAt: now,
+        updatedAt: now,
+      },
+    ];
+    await fs.writeFile(USERS_FILE, JSON.stringify(seed, null, 2), 'utf8');
+  }
+}
+
+async function readUsers() {
+  await ensureDataFile();
+  const raw = await fs.readFile(USERS_FILE, 'utf8');
+  try {
+    const data = JSON.parse(raw);
+    if (!Array.isArray(data)) {
+      return [];
+    }
+
+    let mutated = false;
+    const normalized = data.map((user) => {
+      const next = { ...user };
+      if (!next.id) {
+        next.id = randomUUID();
+        mutated = true;
+      }
+      if (!next.role) {
+        next.role = 'customer';
+        mutated = true;
+      }
+      if (!next.status) {
+        next.status = 'active';
+        mutated = true;
+      }
+      if (typeof next.credits !== 'number') {
+        next.credits = 0;
+        mutated = true;
+      }
+      if (!next.apiToken) {
+        next.apiToken = generateApiToken();
+        mutated = true;
+      }
+      return next;
+    });
+
+    if (mutated) {
+      await fs.writeFile(USERS_FILE, JSON.stringify(normalized, null, 2), 'utf8');
+    }
+
+    return normalized;
   } catch (error) {
     return false;
   }
@@ -300,6 +369,19 @@ async function createUserRecord(data, { defaultStatus = 'pending' } = {}) {
   const now = new Date().toISOString();
   const id = randomUUID();
   const apiToken = generateApiToken();
+  const user = {
+    id: randomUUID(),
+    displayName: name,
+    email: mail,
+    rep4repKey: normalizeString(rep4repKey),
+    credits: normalizeCredits(credits),
+    status: 'active',
+    role: 'customer',
+    notes: normalizeString(notes),
+    apiToken: generateApiToken(),
+    createdAt: now,
+    updatedAt: now,
+  };
 
   await connection.run(
     `INSERT INTO app_user (
@@ -394,6 +476,7 @@ async function updateUser(id, updates = {}) {
     const { hash, salt } = await hashPassword(updates.password);
     next.passwordHash = hash;
     next.passwordSalt = salt;
+
   }
 
   await assertUniqueFields(
@@ -566,6 +649,83 @@ async function updateRep4repKey(id, rep4repKey) {
   const updatedAt = new Date().toISOString();
   await connection.run(`UPDATE app_user SET rep4repKey = ?, updatedAt = ? WHERE id = ?`, [key, updatedAt, id]);
   return sanitizeUser({ ...current, rep4repKey: key, updatedAt });
+  const nextCredits = current.credits + Math.round(amount);
+  if (nextCredits < 0) {
+    throw new Error('Créditos insuficientes para remover.');
+  }
+
+  const credits = normalizeCredits(nextCredits);
+  const updated = { ...current, credits, updatedAt: new Date().toISOString() };
+  users[index] = updated;
+  await writeUsers(users);
+  return updated;
+}
+
+async function consumeCredits(id, amount = 1) {
+  const qty = Math.max(0, Math.floor(Number(amount)));
+  if (qty <= 0) {
+    return getUser(id);
+  }
+
+  const users = await readUsers();
+  const index = users.findIndex((user) => user.id === id);
+  if (index === -1) {
+    throw new Error('Usuário não encontrado.');
+  }
+
+  const current = users[index];
+  if (current.credits < qty) {
+    throw new Error('Créditos insuficientes.');
+  }
+
+  const updated = {
+    ...current,
+    credits: current.credits - qty,
+    updatedAt: new Date().toISOString(),
+  };
+  users[index] = updated;
+  await writeUsers(users);
+  return updated;
+}
+
+async function rotateApiToken(id) {
+  const users = await readUsers();
+  const index = users.findIndex((user) => user.id === id);
+  if (index === -1) {
+    throw new Error('Usuário não encontrado.');
+  }
+
+  const updated = {
+    ...users[index],
+    apiToken: generateApiToken(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  users[index] = updated;
+  await writeUsers(users);
+  return updated;
+}
+
+async function authenticateUser({ userId, token }) {
+  if (!userId || !token) {
+    return null;
+  }
+
+  const users = await readUsers();
+  const user = users.find((item) => item.id === userId);
+  if (!user) {
+    return null;
+  }
+
+  if (user.status !== 'active') {
+    return null;
+  }
+
+  if (user.apiToken !== token) {
+    return null;
+  }
+
+  return user;
 }
 
 module.exports = {
@@ -582,4 +742,5 @@ module.exports = {
   rotateApiToken,
   loginUser,
   updateRep4repKey,
+
 };

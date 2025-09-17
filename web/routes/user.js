@@ -9,6 +9,7 @@ function extractAuth(req) {
   const bearerToken = authHeader && authHeader.toLowerCase().startsWith('bearer ')
     ? authHeader.slice(7).trim()
     : null;
+
   const userId =
     req.header('x-user-id') ||
     req.body?.userId ||
@@ -16,6 +17,7 @@ function extractAuth(req) {
     null;
   const token =
     bearerToken ||
+
     req.header('x-user-token') ||
     req.body?.token ||
     req.body?.apiToken ||
@@ -76,6 +78,7 @@ router.use(async (req, res, next) => {
     const user = await userStore.authenticateUser({ userId, token });
     if (!user) {
       return res.status(401).json({ success: false, error: 'Credenciais inválidas ou conta inativa.' });
+      return res.status(401).json({ success: false, error: 'Credenciais inválidas.' });
     }
     req.user = user;
     next();
@@ -92,6 +95,7 @@ router.get('/me', async (req, res) => {
       id: user.id,
       username: user.username,
       fullName: user.fullName,
+      displayName: user.displayName,
       email: user.email,
       credits: user.credits,
       status: user.status,
@@ -118,6 +122,11 @@ router.patch('/me', async (req, res) => {
   } catch (error) {
     res.status(400).json({ success: false, error: error.message });
   }
+});
+
+      rep4repKey: user.rep4repKey,
+    },
+  });
 });
 
 router.post('/run', async (req, res) => {
