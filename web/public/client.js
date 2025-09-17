@@ -5,6 +5,8 @@
   const dashboardSection = document.querySelector('[data-dashboard]');
   const runButton = document.querySelector('[data-run-button]');
   const runOutput = document.querySelector('[data-run-output]');
+  const runMaxInput = document.querySelector('[data-run-max]');
+  const runAccountsInput = document.querySelector('[data-run-accounts]');
   const keyForm = document.querySelector('[data-key-form]');
   const statusBadge = document.querySelector('[data-client-status]');
   const creditsEl = document.querySelector('[data-client-credits]');
@@ -206,6 +208,41 @@
       const position = Number(state.queue.position);
       const label = Number.isFinite(position) ? `#${position}` : '#?';
       runButton.textContent = `Em fila (${label})`;
+    }
+  }
+
+  function sanitizeLimit(value, fallback, max) {
+    const num = Number(value);
+    if (!Number.isFinite(num) || num <= 0) {
+      return fallback;
+    }
+    return Math.max(1, Math.min(max, Math.floor(num)));
+  }
+
+  function getRunPayload() {
+    const payload = { command: 'autoRun' };
+    const maxValue = runMaxInput ? sanitizeLimit(runMaxInput.value, 1000, 1000) : 1000;
+    const accountValue = runAccountsInput ? sanitizeLimit(runAccountsInput.value, 100, 100) : 100;
+
+    if (maxValue) {
+      payload.maxCommentsPerAccount = maxValue;
+    }
+    if (accountValue) {
+      payload.accountLimit = accountValue;
+    }
+
+    return payload;
+  }
+
+  function applyRunSettings(applied) {
+    if (!applied) {
+      return;
+    }
+    if (runMaxInput && applied.maxCommentsPerAccount != null) {
+      runMaxInput.value = applied.maxCommentsPerAccount;
+    }
+    if (runAccountsInput && applied.accountLimit != null) {
+      runAccountsInput.value = applied.accountLimit;
     }
   }
 
@@ -419,7 +456,7 @@
         const data = await apiFetch('/api/user/run', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ command: 'autoRun' }),
+          body: JSON.stringify(getRunPayload()),
         });
         if (data?.queue) {
           const lines = [
@@ -437,11 +474,28 @@
           if (Number.isFinite(total)) {
             lines.push(`Pedidos na fila: ${total}`);
           }
+          if (data?.overrides?.applied) {
+            const applied = data.overrides.applied;
+            lines.push(
+              `Limites aplicados: ${applied.maxCommentsPerAccount} comentário(s) · ${applied.accountLimit} conta(s)`,
+            );
+          }
           runOutput.textContent = lines.join('\n');
           renderQueueStatus(data.queue);
         } else {
           runOutput.textContent = data.message || 'Pedido registrado.';
           renderQueueStatus(null);
+        }
+        if (!data?.queue && data?.overrides?.applied) {
+          const applied = data.overrides.applied;
+          const lines = [
+            data.message || 'Pedido registrado.',
+            `Limites aplicados: ${applied.maxCommentsPerAccount} comentário(s) · ${applied.accountLimit} conta(s)`,
+          ];
+          runOutput.textContent = lines.join('\n');
+        }
+        if (data?.overrides?.applied) {
+          applyRunSettings(data.overrides.applied);
         }
         showToast(data.message || 'Pedido enviado.');
       } catch (error) {

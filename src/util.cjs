@@ -129,6 +129,138 @@ const keepAliveState = {
   ownerWebhookUrl: null,
 };
 
+const queueRunnerState = {
+  running: false,
+  stopRequested: false,
+  startedAt: null,
+  finishedAt: null,
+  startedBy: null,
+  options: null,
+  currentJob: null,
+  lastOutcome: null,
+  lastResult: null,
+  lastError: null,
+};
+
+function sanitizeQueueJob(job) {
+  if (!job) {
+    return null;
+  }
+
+  const user = job.user || {};
+  return {
+    id: job.id || null,
+    status: job.status || null,
+    position: job.position != null ? Number(job.position) : null,
+    user: {
+      id: user.id || null,
+      username: user.username || null,
+      fullName: user.fullName || null,
+    },
+  };
+}
+
+function sanitizeQueueOutcome(outcome) {
+  if (!outcome) {
+    return null;
+  }
+
+  const client = outcome.client || {};
+  return {
+    status: outcome.status || null,
+    jobId: outcome.queueJob?.id || outcome.jobId || null,
+    clientId: client.id || null,
+    clientName: client.fullName || client.username || client.email || null,
+    totalComments: outcome.summary?.totalComments ?? null,
+    error: outcome.error || null,
+  };
+}
+
+function markQueueRunnerStart({ startedBy = null, options = null } = {}) {
+  queueRunnerState.running = true;
+  queueRunnerState.stopRequested = false;
+  queueRunnerState.startedAt = new Date().toISOString();
+  queueRunnerState.finishedAt = null;
+  queueRunnerState.startedBy = startedBy || null;
+  queueRunnerState.options = options || null;
+  queueRunnerState.currentJob = null;
+  queueRunnerState.lastOutcome = null;
+  queueRunnerState.lastResult = null;
+  queueRunnerState.lastError = null;
+}
+
+function markQueueRunnerProgress(update = {}) {
+  if (Object.prototype.hasOwnProperty.call(update, 'currentJob')) {
+    queueRunnerState.currentJob = sanitizeQueueJob(update.currentJob);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(update, 'lastOutcome')) {
+    queueRunnerState.lastOutcome = sanitizeQueueOutcome(update.lastOutcome);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(update, 'message')) {
+    queueRunnerState.lastMessage = update.message ? String(update.message) : null;
+  }
+}
+
+function summarizeRunnerResult(result) {
+  if (!result) {
+    return null;
+  }
+
+  const totalClientComments = Array.isArray(result.clients)
+    ? result.clients.reduce((total, item) => total + (item?.summary?.totalComments ?? 0), 0)
+    : 0;
+
+  const ownerComments = result.owner?.totalComments ?? 0;
+
+  return {
+    stopped: Boolean(result.stopped),
+    completedJobs: Number.isFinite(result.completedJobs)
+      ? Number(result.completedJobs)
+      : Array.isArray(result.clients)
+      ? result.clients.length
+      : 0,
+    totalClients: Array.isArray(result.clients) ? result.clients.length : 0,
+    totalComments: ownerComments + totalClientComments,
+  };
+}
+
+function markQueueRunnerFinish({ result = null, error = null } = {}) {
+  queueRunnerState.running = false;
+  queueRunnerState.stopRequested = false;
+  queueRunnerState.finishedAt = new Date().toISOString();
+  queueRunnerState.currentJob = null;
+  queueRunnerState.lastOutcome = null;
+  queueRunnerState.lastResult = summarizeRunnerResult(result);
+  queueRunnerState.lastError = error ? error.message || String(error) : null;
+}
+
+function requestQueueRunnerStop() {
+  queueRunnerState.stopRequested = true;
+  return getQueueRunnerStatus();
+}
+
+function isQueueRunnerStopRequested() {
+  return queueRunnerState.stopRequested;
+}
+
+function getQueueRunnerStatus() {
+  return {
+    running: queueRunnerState.running,
+    stopRequested: queueRunnerState.stopRequested,
+    startedAt: queueRunnerState.startedAt,
+    finishedAt: queueRunnerState.finishedAt,
+    startedBy: queueRunnerState.startedBy,
+    options: queueRunnerState.options,
+    currentJob: queueRunnerState.currentJob,
+    lastOutcome: queueRunnerState.lastOutcome,
+    lastResult: queueRunnerState.lastResult,
+    lastError: queueRunnerState.lastError,
+    lastMessage: queueRunnerState.lastMessage || null,
+  };
+}
+
 const statusMessage = {
   inactive: 0,
   steamGuardRequired: 1,
@@ -1298,6 +1430,11 @@ async function prioritizedAutoRun(options = {}) {
     accountLimit = 100,
     clientFilter,
     onClientProcessed,
+    shouldAbort,
+    onQueueStart,
+    onQueueFinish,
+    onJobStart,
+    onJobFinish,
     ...runOverrides
   } = options;
 
@@ -1338,6 +1475,15 @@ async function prioritizedAutoRun(options = {}) {
   }
 
   let completedJobs = 0;
+  let aborted = false;
+
+  if (typeof onQueueStart === 'function') {
+    try {
+      await onQueueStart();
+    } catch (callbackError) {
+      log(`⚠️ onQueueStart callback falhou: ${callbackError.message}`);
+    }
+  }
 
   const processJob = async (job) => {
     const client = job.user || (await userStore.getUser(job.userId));
@@ -1506,6 +1652,12 @@ async function prioritizedAutoRun(options = {}) {
   };
 
   while (true) {
+    if (typeof shouldAbort === 'function' && shouldAbort()) {
+      aborted = true;
+      log('⏹️ Parada solicitada. Encerrando processamento da fila.');
+      break;
+    }
+
     let job;
     try {
       job = await runQueue.takeNextPendingJob();
@@ -1518,6 +1670,25 @@ async function prioritizedAutoRun(options = {}) {
       break;
     }
 
+    if (typeof onJobStart === 'function') {
+      try {
+        await onJobStart(job);
+      } catch (callbackError) {
+        log(`⚠️ onJobStart callback falhou: ${callbackError.message}`);
+      }
+    }
+
+    if (typeof shouldAbort === 'function' && shouldAbort()) {
+      aborted = true;
+      log('⏹️ Parada solicitada antes de iniciar o próximo pedido.');
+      try {
+        await runQueue.releaseJob(job.id, { reason: 'stop-requested' });
+      } catch (releaseError) {
+        log(`⚠️ Falha ao devolver pedido para a fila: ${releaseError.message}`);
+      }
+      break;
+    }
+
     const outcome = await processJob(job);
     if (!outcome) {
       continue;
@@ -1526,6 +1697,14 @@ async function prioritizedAutoRun(options = {}) {
     result.clients.push(outcome);
     if (outcome.status === 'completed') {
       completedJobs += 1;
+    }
+
+    if (typeof onJobFinish === 'function') {
+      try {
+        await onJobFinish(outcome);
+      } catch (callbackError) {
+        log(`⚠️ onJobFinish callback falhou: ${callbackError.message}`);
+      }
     }
   }
 
@@ -1541,6 +1720,17 @@ async function prioritizedAutoRun(options = {}) {
 
   if (!result.clients.length) {
     log('Nenhum cliente elegível para processamento neste ciclo.');
+  }
+
+  result.completedJobs = completedJobs;
+  result.stopped = aborted;
+
+  if (typeof onQueueFinish === 'function') {
+    try {
+      await onQueueFinish(result);
+    } catch (callbackError) {
+      log(`⚠️ onQueueFinish callback falhou: ${callbackError.message}`);
+    }
   }
 
   return result;
@@ -2037,4 +2227,10 @@ module.exports = {
   getEnvRep4RepKey,
   resolveApiToken,
   resolveClientApiToken,
+  markQueueRunnerStart,
+  markQueueRunnerProgress,
+  markQueueRunnerFinish,
+  requestQueueRunnerStop,
+  getQueueRunnerStatus,
+  isQueueRunnerStopRequested,
 };

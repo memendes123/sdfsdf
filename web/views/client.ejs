@@ -150,6 +150,16 @@
                     </form>
                     <div class="client-run">
                         <p>Quando você clica em “Rodar tarefas” cada comentário consome 1 crédito. Ao chegar em zero, o bot pausa automaticamente.</p>
+                        <div class="client-run__inputs">
+                            <label>
+                                <span>Comentários por conta</span>
+                                <input type="number" min="1" max="1000" step="1" value="1000" data-run-max />
+                            </label>
+                            <label>
+                                <span>Limite de contas</span>
+                                <input type="number" min="1" max="100" step="1" value="100" data-run-accounts />
+                            </label>
+                        </div>
                         <button type="button" class="btn btn--primary" data-run-button disabled>▶️ Rodar tarefas</button>
                     </div>
                     <pre class="client-output" data-run-output>Faça login e cadastre sua key para executar.</pre>

@@ -30,10 +30,17 @@
   const queueHistoryList = document.querySelector('[data-queue-history]');
   const queueRefreshButton = document.querySelector('[data-queue-refresh]');
   const queueClearButton = document.querySelector('[data-queue-clear]');
+  const autoRunForm = document.querySelector('[data-auto-run-form]');
+  const autoRunMaxInput = document.querySelector('[data-auto-run-max]');
+  const autoRunAccountsInput = document.querySelector('[data-auto-run-accounts]');
+  const autoRunKeyInput = document.querySelector('[data-auto-run-key]');
+  const autoRunStartButtons = document.querySelectorAll('[data-command="autoRun"]');
+  const autoRunStopButtons = document.querySelectorAll('[data-command="autoRunStop"]');
 
   let toastTimeout = null;
   let cachedUsers = [];
   let cachedQueue = window.__INITIAL_QUEUE__ || null;
+  let queueRunnerStatus = window.__QUEUE_RUNNER__ || null;
 
   function showToast(message, variant = 'success') {
     if (!toastEl) return;
@@ -55,6 +62,98 @@
     if (statEls.cooling) statEls.cooling.textContent = stats.coolingDown ?? '--';
     if (statEls.comments) statEls.comments.textContent = stats.commentsLast24h ?? '--';
   }
+
+  function sanitizeLimit(value, fallback, max) {
+    const num = Number(value);
+    if (!Number.isFinite(num) || num <= 0) {
+      return fallback;
+    }
+    return Math.max(1, Math.min(max, Math.floor(num)));
+  }
+
+  function getAutoRunPayload() {
+    const payload = {};
+    const maxValue = autoRunMaxInput
+      ? sanitizeLimit(autoRunMaxInput.value, 1000, 1000)
+      : 1000;
+    const accountValue = autoRunAccountsInput
+      ? sanitizeLimit(autoRunAccountsInput.value, 100, 100)
+      : 100;
+
+    if (maxValue) {
+      payload.maxCommentsPerAccount = maxValue;
+    }
+    if (accountValue) {
+      payload.accountLimit = accountValue;
+    }
+
+    if (autoRunKeyInput) {
+      const key = autoRunKeyInput.value && autoRunKeyInput.value.trim();
+      if (key) {
+        payload.apiToken = key;
+      }
+    }
+
+    return payload;
+  }
+
+  function applyAutoRunSettings(applied) {
+    if (!applied) {
+      return;
+    }
+    if (autoRunMaxInput && applied.maxCommentsPerAccount != null) {
+      autoRunMaxInput.value = applied.maxCommentsPerAccount;
+    }
+    if (autoRunAccountsInput && applied.accountLimit != null) {
+      autoRunAccountsInput.value = applied.accountLimit;
+    }
+  }
+
+  function renderQueueRunnerStatus(status) {
+    queueRunnerStatus = status || null;
+    const running = Boolean(status?.running);
+
+    autoRunStartButtons.forEach((button) => {
+      if (!button) return;
+      if (!button.dataset.originalLabel) {
+        button.dataset.originalLabel = button.textContent;
+      }
+
+      if (running) {
+        const labelParts = ['Executando'];
+        const jobUser = status?.currentJob?.user;
+        const jobLabel = jobUser?.fullName || jobUser?.username || jobUser?.id || null;
+        if (jobLabel) {
+          labelParts.push(`(${jobLabel})`);
+        }
+        button.textContent = labelParts.join(' ');
+      } else {
+        button.textContent = button.dataset.originalLabel;
+      }
+
+      button.disabled = running;
+    });
+
+    autoRunStopButtons.forEach((button) => {
+      if (!button) return;
+      if (!button.dataset.originalLabel) {
+        button.dataset.originalLabel = button.textContent;
+      }
+      button.disabled = !running;
+      button.textContent = button.dataset.originalLabel;
+    });
+
+    if (status?.options) {
+      if (autoRunMaxInput && status.options.maxCommentsPerAccount != null) {
+        autoRunMaxInput.value = status.options.maxCommentsPerAccount;
+      }
+      if (autoRunAccountsInput && status.options.accountLimit != null) {
+        autoRunAccountsInput.value = status.options.accountLimit;
+      }
+    }
+  }
+
+  renderQueueRunnerStatus(queueRunnerStatus);
 
   function statusLabel(status) {
     switch (status) {
@@ -471,6 +570,9 @@
         cachedQueue = data.queue;
         renderQueue(cachedQueue);
       }
+      if (data?.runner) {
+        renderQueueRunnerStatus(data.runner);
+      }
     } catch (error) {
       console.error('[Painel] Falha ao atualizar fila:', error);
       showToast(error.message || 'Erro ao atualizar fila.', 'error');
@@ -498,6 +600,9 @@
       if (data.queue) {
         cachedQueue = data.queue;
         renderQueue(cachedQueue);
+      }
+      if (data.runner) {
+        renderQueueRunnerStatus(data.runner);
       }
       showToast(data.message || 'Pedido cancelado com sucesso.', 'success');
     } catch (error) {
@@ -573,6 +678,9 @@
       } else {
         await refreshQueue();
       }
+      if (data.runner) {
+        renderQueueRunnerStatus(data.runner);
+      }
 
       showToast(data.message || 'Ordem do pedido atualizada.', 'success');
     } catch (error) {
@@ -588,8 +696,25 @@
   async function runCommand(command, button) {
     if (!command) return;
     const payload = { command };
+    const isAutoRunStart = command === 'autoRun';
+    const isAutoRunStop = command === 'autoRunStop';
+
+    if (isAutoRunStart) {
+      Object.assign(payload, getAutoRunPayload());
+    }
+
     try {
       if (button) button.disabled = true;
+      if (isAutoRunStart) {
+        autoRunStartButtons.forEach((btn) => {
+          if (btn) btn.disabled = true;
+        });
+      } else if (isAutoRunStop) {
+        autoRunStopButtons.forEach((btn) => {
+          if (btn) btn.disabled = true;
+        });
+      }
+
       const res = await fetch(buildUrl('/api/run'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -636,12 +761,18 @@
         cachedQueue = data.queue;
         renderQueue(cachedQueue);
       }
+      if (data.applied) {
+        applyAutoRunSettings(data.applied);
+      }
+      if (data.runner) {
+        renderQueueRunnerStatus(data.runner);
+      }
 
       showToast(message, 'success');
       if (command === 'autoRun' || command === 'stats') {
         refreshStats();
       }
-      if (command === 'autoRun') {
+      if (command === 'autoRun' || command === 'autoRunStop') {
         refreshUsers();
         refreshQueue();
       }
@@ -650,8 +781,10 @@
         outputEl.textContent = `❌ ${error.message}`;
       }
       showToast(error.message || 'Erro ao executar comando.', 'error');
+      renderQueueRunnerStatus(queueRunnerStatus);
     } finally {
       if (button) button.disabled = false;
+      renderQueueRunnerStatus(queueRunnerStatus);
     }
   }
 
@@ -747,6 +880,9 @@
           renderQueue(cachedQueue);
         } else {
           await refreshQueue();
+        }
+        if (data.runner) {
+          renderQueueRunnerStatus(data.runner);
         }
 
         showToast(data.message || 'Fila limpa com sucesso.', 'success');

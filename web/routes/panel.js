@@ -17,6 +17,12 @@ const {
   announceQueueEvent,
   getEnvRep4RepKey,
   resolveApiToken,
+  markQueueRunnerStart,
+  markQueueRunnerProgress,
+  markQueueRunnerFinish,
+  requestQueueRunnerStop,
+  getQueueRunnerStatus,
+  isQueueRunnerStopRequested,
 } = require('../../src/util.cjs');
 const runQueue = require('../../src/runQueue.cjs');
 
@@ -32,6 +38,14 @@ function resolveOwnerCredentials(adminUser) {
     webhookUrl: adminUser?.discordWebhookUrl || '',
     user: adminUser || null,
   };
+}
+
+function sanitizeAdminLimit(value, fallback, max) {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) {
+    return fallback;
+  }
+  return Math.max(1, Math.min(max, Math.floor(num)));
 }
 
 userStore.ensureDataFile().catch((error) => {
@@ -110,6 +124,7 @@ router.get('/', async (req, res) => {
       initialStats: stats,
       initialUsers: users,
       initialQueue: queue,
+      initialRunner: getQueueRunnerStatus(),
     });
   } catch (error) {
     console.error('[Painel] Erro ao renderizar dashboard:', error);
@@ -154,22 +169,101 @@ router.post('/api/run', async (req, res) => {
 
   const handlers = {
     autoRun: async () => {
+      const {
+        maxCommentsPerAccount: requestedMax,
+        accountLimit: requestedAccounts,
+        apiToken: providedToken,
+      } = req.body || {};
+
       const adminUser = await userStore.findActiveAdmin();
-      const { token, webhookUrl, user } = resolveOwnerCredentials(adminUser);
-      if (!token) {
+      const { token: fallbackToken, webhookUrl, user } = resolveOwnerCredentials(adminUser);
+
+      const explicitToken = resolveApiToken(providedToken, { fallbackToEnv: false });
+      const effectiveToken = explicitToken || fallbackToken;
+      if (!effectiveToken) {
         throw new Error('Configure a chave Rep4Rep no perfil admin ou defina REP4REP_KEY no ambiente antes de executar.');
       }
 
-      const summary = await prioritizedAutoRun({
-        ownerToken: token,
-        ownerWebhookUrl: webhookUrl,
-        ownerUser: user,
-        accountLimit: 100,
-        maxCommentsPerAccount: 1000,
-        clientFilter: (user) => user.role !== 'admin',
+      const sanitizedMax = sanitizeAdminLimit(requestedMax, 1000, 1000);
+      const sanitizedAccounts = sanitizeAdminLimit(requestedAccounts, 100, 100);
+
+      const currentStatus = getQueueRunnerStatus();
+      if (currentStatus.running) {
+        return {
+          message: '⚠️ Já existe uma execução em andamento. Use “Parar autoRun” para interromper.',
+          runner: currentStatus,
+          applied: {
+            maxCommentsPerAccount: sanitizedMax,
+            accountLimit: sanitizedAccounts,
+            apiTokenProvided: Boolean(explicitToken),
+          },
+        };
+      }
+
+      markQueueRunnerStart({
+        startedBy: req.adminUser?.name || null,
+        options: {
+          maxCommentsPerAccount: sanitizedMax,
+          accountLimit: sanitizedAccounts,
+          apiTokenProvided: Boolean(explicitToken),
+        },
       });
-      const queue = await runQueue.getQueueSnapshot();
-      return { message: '✅ Execução concluída com prioridade.', summary, queue };
+
+      try {
+        const summary = await prioritizedAutoRun({
+          ownerToken: effectiveToken,
+          ownerWebhookUrl: webhookUrl,
+          ownerUser: user,
+          accountLimit: sanitizedAccounts,
+          maxCommentsPerAccount: sanitizedMax,
+          clientFilter: (user) => user.role !== 'admin',
+          shouldAbort: isQueueRunnerStopRequested,
+          onQueueStart: () => markQueueRunnerProgress({ message: 'Processando fila de clientes...' }),
+          onJobStart: (job) => markQueueRunnerProgress({ currentJob: job }),
+          onJobFinish: (outcome) =>
+            markQueueRunnerProgress({ currentJob: null, lastOutcome: outcome }),
+          onQueueFinish: (result) =>
+            markQueueRunnerProgress({
+              currentJob: null,
+              lastOutcome: null,
+              message: result.stopped ? 'Execução interrompida.' : 'Execução concluída.',
+            }),
+        });
+        markQueueRunnerFinish({ result: summary });
+        const queue = await runQueue.getQueueSnapshot();
+        const runner = getQueueRunnerStatus();
+        const message = summary.stopped
+          ? '⏹️ Execução interrompida a pedido do operador.'
+          : '✅ Execução concluída com prioridade.';
+        return {
+          message,
+          summary,
+          queue,
+          runner,
+          applied: {
+            maxCommentsPerAccount: sanitizedMax,
+            accountLimit: sanitizedAccounts,
+            apiTokenProvided: Boolean(explicitToken),
+          },
+        };
+      } catch (error) {
+        markQueueRunnerFinish({ error });
+        throw error;
+      }
+    },
+    autoRunStop: async () => {
+      const status = getQueueRunnerStatus();
+      if (!status.running) {
+        return {
+          message: '⚠️ Nenhuma execução em andamento no momento.',
+          runner: status,
+        };
+      }
+      const updated = requestQueueRunnerStop();
+      return {
+        message: '⏹️ Parada solicitada. Aguarde a finalização do ciclo atual.',
+        runner: updated,
+      };
     },
     stats: async () => {
       const stats = await collectUsageStats();
@@ -219,10 +313,13 @@ router.post('/api/run', async (req, res) => {
 
   try {
     const payload = await handler();
-    res.json({ success: true, ...payload });
+    const runner = payload && Object.prototype.hasOwnProperty.call(payload, 'runner')
+      ? payload.runner
+      : getQueueRunnerStatus();
+    res.json({ success: true, ...payload, runner });
   } catch (error) {
     console.error(`[Painel] Falha ao executar comando ${command}:`, error);
-    res.status(500).json({ success: false, error: error.message });
+    res.status(500).json({ success: false, error: error.message, runner: getQueueRunnerStatus() });
   }
 });
 
@@ -253,7 +350,7 @@ router.get('/api/watchdog', (req, res) => {
 router.get('/api/queue', async (req, res) => {
   try {
     const queue = await runQueue.getQueueSnapshot();
-    res.json({ success: true, queue });
+    res.json({ success: true, queue, runner: getQueueRunnerStatus() });
   } catch (error) {
     console.error('[Painel] Falha ao consultar fila:', error);
     res.status(500).json({ success: false, error: 'Não foi possível obter a fila.' });
@@ -295,6 +392,7 @@ router.post('/api/queue/clear', async (req, res) => {
         : 'Nenhum pedido pendente para remover.',
       cancelled: result,
       queue,
+      runner: getQueueRunnerStatus(),
     });
   } catch (error) {
     console.error('[Painel] Falha ao limpar fila:', error);
@@ -337,6 +435,7 @@ router.post('/api/queue/:id/cancel', async (req, res) => {
       message: 'Pedido cancelado com sucesso.',
       job: result.job,
       queue,
+      runner: getQueueRunnerStatus(),
     });
   } catch (error) {
     console.error('[Painel] Falha ao cancelar pedido:', error);
@@ -365,6 +464,7 @@ router.post('/api/queue/:id/reorder', async (req, res) => {
       success: true,
       message: 'Ordem do pedido atualizada.',
       queue,
+      runner: getQueueRunnerStatus(),
     });
   } catch (error) {
     console.error('[Painel] Falha ao reordenar pedido:', error);
