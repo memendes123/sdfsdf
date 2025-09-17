@@ -158,6 +158,13 @@ a {
   overflow: hidden;
   clip: rect(0 0 0 0);
   clip-path: inset(50%);
+  left: -9999px;
+  top: auto;
+  right: auto;
+  bottom: auto;
+  pointer-events: none;
+  opacity: 0;
+  z-index: -1;
 }
 
 
@@ -784,6 +791,35 @@ a {
   opacity: 1;
   transform: translateY(0);
   pointer-events: auto;
+}
+
+body {
+  position: static !important;
+  top: 0 !important;
+}
+
+html {
+  top: 0 !important;
+}
+
+body > .skiptranslate,
+body .skiptranslate,
+.goog-te-banner-frame.skiptranslate {
+  display: none !important;
+}
+
+.goog-te-gadget,
+.goog-te-combo {
+  position: absolute !important;
+  left: -9999px !important;
+  top: auto !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+.goog-text-highlight {
+  background: transparent !important;
+  box-shadow: none !important;
 }
 
 .user-editor {

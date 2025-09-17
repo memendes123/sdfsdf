@@ -57,6 +57,35 @@
     });
   }
 
+  function cleanGoogleArtifacts() {
+    const bannerFrame = document.querySelector('.goog-te-banner-frame.skiptranslate');
+    if (bannerFrame && bannerFrame.parentNode) {
+      bannerFrame.parentNode.removeChild(bannerFrame);
+    }
+
+    const skipElements = document.querySelectorAll('html.skiptranslate, body.skiptranslate');
+    skipElements.forEach((element) => {
+      element.classList.remove('skiptranslate');
+      element.style.top = '0px';
+    });
+
+    const gadgetWrappers = document.querySelectorAll('.goog-te-gadget, .goog-te-combo');
+    gadgetWrappers.forEach((element) => {
+      element.style.position = 'absolute';
+      element.style.left = '-9999px';
+      element.style.top = 'auto';
+      element.style.opacity = '0';
+      element.style.pointerEvents = 'none';
+    });
+  }
+
+  const artifactCleanupDelays = [0, 120, 400];
+  function scheduleArtifactCleanup() {
+    artifactCleanupDelays.forEach((delay) => {
+      window.setTimeout(cleanGoogleArtifacts, delay);
+    });
+  }
+
   function triggerTranslate(lang) {
     const apply = () => {
       const combo = document.querySelector('.goog-te-combo');
@@ -67,6 +96,7 @@
         combo.value = lang;
       }
       combo.dispatchEvent(new Event('change'));
+      scheduleArtifactCleanup();
       return true;
     };
 
@@ -102,16 +132,29 @@
   }
 
   function ensureHiddenContainer() {
-    const container = document.getElementById('google_translate_container');
-    if (container) {
-      container.style.position = 'absolute';
-      container.style.width = '1px';
-      container.style.height = '1px';
-      container.style.overflow = 'hidden';
-      container.style.clip = 'rect(0 0 0 0)';
-      container.style.clipPath = 'inset(50%)';
-      container.style.whiteSpace = 'nowrap';
+    let container = document.getElementById('google_translate_container');
+    if (!container) {
+      container = document.createElement('div');
+      container.id = 'google_translate_container';
+      container.className = 'language-switch__container';
+      container.setAttribute('aria-hidden', 'true');
+      document.body.appendChild(container);
     }
+
+    container.style.position = 'absolute';
+    container.style.width = '1px';
+    container.style.height = '1px';
+    container.style.overflow = 'hidden';
+    container.style.clip = 'rect(0 0 0 0)';
+    container.style.clipPath = 'inset(50%)';
+    container.style.whiteSpace = 'nowrap';
+    container.style.left = '-9999px';
+    container.style.top = 'auto';
+    container.style.right = 'auto';
+    container.style.bottom = 'auto';
+    container.style.opacity = '0';
+    container.style.pointerEvents = 'none';
+    container.style.zIndex = '-1';
   }
 
   function loadGoogleTranslate() {
@@ -137,6 +180,7 @@
       );
 
       triggerTranslate(currentLanguage);
+      scheduleArtifactCleanup();
     };
 
     const script = document.createElement('script');
@@ -144,6 +188,7 @@
     script.async = true;
     script.defer = true;
     document.head.appendChild(script);
+    scheduleArtifactCleanup();
   }
 
   function closeDropdown(dropdown, toggle) {
@@ -206,6 +251,7 @@
     currentLanguage = preferred;
     updateUi(preferred);
     persistLanguage(preferred);
+    cleanGoogleArtifacts();
     loadGoogleTranslate();
   });
 })();

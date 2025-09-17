@@ -469,6 +469,18 @@ function queueAutomaticBackup({ reason = 'alteração' } = {}) {
   return scheduledBackupPromise;
 }
 
+const BACKUP_EVENT_TYPES = new Set(['profile.insert', 'profile.update', 'profile.remove']);
+if (typeof db.on === 'function') {
+  db.on('change', (event) => {
+    if (!event || !event.type || !BACKUP_EVENT_TYPES.has(event.type)) {
+      return;
+    }
+
+    const detail = event.username ? `${event.type}:${event.username}` : event.type;
+    queueAutomaticBackup({ reason: detail });
+  });
+}
+
 function removeFromAccountsFile(username) {
   if (!fs.existsSync(ACCOUNTS_PATH)) {
     return;
