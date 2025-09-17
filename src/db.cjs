@@ -1,12 +1,25 @@
+const fs = require('fs');
 const path = require('path');
+const { EventEmitter } = require('events');
 const sqlite3 = require('sqlite3').verbose();
 const { open } = require('sqlite');
 
-class DbWrapper {
+const ROOT_DIR = path.join(__dirname, '..');
+const DEFAULT_DB_NAME = 'steamprofiles.db';
+
+function ensureDirectory(dirPath) {
+  if (!fs.existsSync(dirPath)) {
+    fs.mkdirSync(dirPath, { recursive: true });
+  }
+}
+
+class DbWrapper extends EventEmitter {
   constructor() {
+    super();
     this.db = null;
     this._initPromise = null;
-    this.databasePath = path.join(__dirname, '..', 'steamprofiles.db');
+    this.databasePath = null;
+    this._resolvedDatabaseEnv = null;
   }
 
   async init() {
@@ -16,17 +29,19 @@ class DbWrapper {
 
     if (!this._initPromise) {
       this._initPromise = (async () => {
+        const filename = this._resolveDatabasePath();
         const database = await open({
-          filename: this.databasePath,
-          driver: sqlite3.Database
+          filename,
+          driver: sqlite3.Database,
         });
 
+        await database.exec('PRAGMA journal_mode = WAL');
         this.db = database;
         await this._createProfilesTable();
         await this._createCommentsTable();
         await this._createUsersTable();
         await this._createRunQueueTable();
-        console.log("📦 Banco de dados inicializado.");
+        console.log(`📦 Banco de dados inicializado em ${this.databasePath}.`);
         return this.db;
       })().catch((err) => {
         this._initPromise = null;
@@ -35,6 +50,72 @@ class DbWrapper {
     }
 
     return this._initPromise;
+  }
+
+  _resolveDatabasePath() {
+    const envPath = (process.env.DATABASE_PATH || '').trim();
+    const previousEnv = this._resolvedDatabaseEnv;
+    const rootCandidate = path.join(ROOT_DIR, DEFAULT_DB_NAME);
+
+    let resolvedPath = null;
+
+    if (envPath) {
+      resolvedPath = path.isAbsolute(envPath)
+        ? envPath
+        : path.resolve(ROOT_DIR, envPath);
+      ensureDirectory(path.dirname(resolvedPath));
+    } else {
+      const legacyInData = path.join(ROOT_DIR, 'data', DEFAULT_DB_NAME);
+      const shouldUseLegacy = !fs.existsSync(rootCandidate) && fs.existsSync(legacyInData);
+      resolvedPath = shouldUseLegacy ? legacyInData : rootCandidate;
+      ensureDirectory(path.dirname(resolvedPath));
+    }
+
+    if (this.databasePath !== resolvedPath || previousEnv !== envPath) {
+      this.databasePath = resolvedPath;
+      this._resolvedDatabaseEnv = envPath;
+    }
+
+    return this.databasePath;
+  }
+
+  _emitChange(details = {}) {
+    const payload = {
+      timestamp: new Date().toISOString(),
+      ...details,
+    };
+
+    this.emit('change', payload);
+  }
+
+  async checkpoint(mode = 'PASSIVE') {
+    await this._ensureReady();
+    const allowed = new Set(['PASSIVE', 'FULL', 'RESTART', 'TRUNCATE']);
+    const normalized =
+      typeof mode === 'string' && mode.trim() ? mode.trim().toUpperCase() : 'PASSIVE';
+    const target = allowed.has(normalized) ? normalized : 'PASSIVE';
+
+    try {
+      await this.db.exec(`PRAGMA wal_checkpoint(${target})`);
+    } catch (error) {
+      console.warn(`[DB] Falha ao executar wal_checkpoint(${target}):`, error.message);
+    }
+  }
+
+  async vacuumInto(destinationPath) {
+    await this._ensureReady();
+    const target = typeof destinationPath === 'string' ? destinationPath.trim() : '';
+    if (!target) {
+      throw new Error('Destino inválido para o backup.');
+    }
+
+    const escaped = target.replace(/'/g, "''");
+    await this.db.exec(`VACUUM INTO '${escaped}'`);
+  }
+
+  recordChange(reason, extra = {}) {
+    const type = typeof reason === 'string' && reason.trim() ? reason.trim() : 'change';
+    this._emitChange({ type, ...extra });
   }
 
   async _ensureReady() {
@@ -150,20 +231,82 @@ class DbWrapper {
       const serializedCookies = typeof cookies === 'string'
         ? cookies
         : JSON.stringify(cookies || []);
-      const result = await this.db.run(`
-        INSERT INTO steamprofile (username, password, sharedSecret, steamId, cookies)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(steamId) DO UPDATE SET
-          username = excluded.username,
-          password = excluded.password,
-          sharedSecret = excluded.sharedSecret,
-          cookies = excluded.cookies
-      `, [username, password, sharedSecret || null, steamId, serializedCookies]);
+      let existingProfile = null;
+
+      if (steamId) {
+        existingProfile = await this.db.get(
+          `SELECT id, steamId, username FROM steamprofile WHERE steamId = ? OR username = ?`,
+          [steamId, username],
+        );
+      } else {
+        existingProfile = await this.db.get(
+          `SELECT id, steamId, username FROM steamprofile WHERE username = ?`,
+          [username],
+        );
+      }
+
+      let changeType = existingProfile ? 'profile.update' : 'profile.insert';
+      let result = null;
+
+      if (existingProfile) {
+        result = await this.db.run(
+          `UPDATE steamprofile
+             SET username = ?, password = ?, sharedSecret = ?, steamId = ?, cookies = ?
+           WHERE id = ?`,
+          [username, password, sharedSecret || null, steamId, serializedCookies, existingProfile.id],
+        );
+      } else {
+        try {
+          result = await this.db.run(
+            `INSERT INTO steamprofile (username, password, sharedSecret, steamId, cookies)
+             VALUES (?, ?, ?, ?, ?)`,
+            [username, password, sharedSecret || null, steamId, serializedCookies],
+          );
+        } catch (error) {
+          if (
+            steamId &&
+            /UNIQUE constraint failed: steamprofile\.steamId/.test(error?.message || '')
+          ) {
+            const conflicting = await this.db.get(
+              `SELECT id, steamId, username FROM steamprofile WHERE steamId = ?`,
+              [steamId],
+            );
+            if (conflicting) {
+              existingProfile = conflicting;
+              changeType = 'profile.update';
+              result = await this.db.run(
+                `UPDATE steamprofile
+                   SET username = ?, password = ?, sharedSecret = ?, steamId = ?, cookies = ?
+                 WHERE id = ?`,
+                [
+                  username,
+                  password,
+                  sharedSecret || null,
+                  steamId,
+                  serializedCookies,
+                  conflicting.id,
+                ],
+              );
+            } else {
+              throw error;
+            }
+          } else {
+            throw error;
+          }
+        }
+      }
 
       console.log(`✅ Perfil ${username} adicionado/atualizado.`);
+      if (result?.changes > 0) {
+        const steamRef = steamId || existingProfile?.steamId || null;
+        this._emitChange({ type: changeType, username, steamId: steamRef });
+      }
+
+      await this.checkpoint('PASSIVE');
       return result;
     } catch (err) {
       console.error("❌ Erro ao adicionar/atualizar perfil:", err.message);
+      throw err;
     }
   }
 
@@ -176,6 +319,8 @@ class DbWrapper {
 
     if (result.changes > 0) {
       console.log(`🗑️ Perfil '${username}' removido.`);
+      this._emitChange({ type: 'profile.remove', username });
+      await this.checkpoint('PASSIVE');
     } else {
       console.log(`⚠️ Nenhum perfil encontrado com username '${username}'.`);
     }
@@ -224,12 +369,20 @@ class DbWrapper {
   }
 
   getDatabasePath() {
-    return this.databasePath;
+    return this.databasePath || this._resolveDatabasePath();
   }
 
   async getConnection() {
     await this._ensureReady();
     return this.db;
+  }
+
+  async close() {
+    if (this.db) {
+      await this.db.close();
+      this.db = null;
+      this._initPromise = null;
+    }
   }
 
   // Utilitário opcional para logging ou debug
