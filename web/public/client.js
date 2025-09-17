@@ -25,6 +25,7 @@
   const queueEstimateEl = document.querySelector('[data-client-queue-estimate]');
   const queueTotalEl = document.querySelector('[data-client-queue-total]');
   const queueRefreshButton = document.querySelector('[data-client-queue-refresh]');
+  const queueCancelButton = document.querySelector('[data-client-queue-cancel]');
 
   const storageKeys = {
     userId: 'rep4repUserId',
@@ -256,12 +257,29 @@
         const total = Number(queue.queueLength);
         queueTotalEl.textContent = Number.isFinite(total) ? total : '--';
       }
+      if (queueCancelButton) {
+        const pendingJob = queue.job && queue.job.status === 'pending' && queue.job.id ? queue.job : null;
+        if (pendingJob) {
+          queueCancelButton.hidden = false;
+          queueCancelButton.disabled = false;
+          queueCancelButton.dataset.jobId = pendingJob.id;
+        } else {
+          queueCancelButton.hidden = true;
+          queueCancelButton.disabled = true;
+          delete queueCancelButton.dataset.jobId;
+        }
+      }
     } else {
       state.queue = null;
       if (queueMessageEl) {
         queueMessageEl.textContent = 'Nenhuma ordem aguardando processamento.';
       }
       queueCard.hidden = true;
+      if (queueCancelButton) {
+        queueCancelButton.hidden = true;
+        queueCancelButton.disabled = false;
+        delete queueCancelButton.dataset.jobId;
+      }
     }
 
     refreshRunButton();
@@ -440,6 +458,41 @@
   if (queueRefreshButton) {
     queueRefreshButton.addEventListener('click', () => {
       loadQueueStatus();
+    });
+  }
+
+  if (queueCancelButton) {
+    queueCancelButton.addEventListener('click', async () => {
+      const jobId = queueCancelButton.dataset.jobId;
+      if (!jobId) {
+        showToast('Nenhum pedido pendente para remover.', 'error');
+        return;
+      }
+
+      const confirmed = window.confirm('Deseja cancelar seu pedido na fila?');
+      if (!confirmed) {
+        return;
+      }
+
+      try {
+        queueCancelButton.disabled = true;
+        const data = await apiFetch('/api/user/queue/cancel', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jobId }),
+        });
+        if (data?.queue) {
+          renderQueueStatus(data.queue);
+        } else {
+          renderQueueStatus(null);
+        }
+        showToast(data.message || 'Pedido removido da fila.');
+      } catch (error) {
+        showToast(error.message || 'Não foi possível cancelar o pedido.', 'error');
+        loadQueueStatus();
+      } finally {
+        queueCancelButton.disabled = false;
+      }
     });
   }
 
