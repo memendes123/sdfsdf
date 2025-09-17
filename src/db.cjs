@@ -24,6 +24,7 @@ class DbWrapper {
         this.db = database;
         await this._createProfilesTable();
         await this._createCommentsTable();
+        await this._createUsersTable();
         console.log("📦 Banco de dados inicializado.");
         return this.db;
       })().catch((err) => {
@@ -68,6 +69,36 @@ class DbWrapper {
         steamId TEXT,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
       )
+    `);
+  }
+
+  async _createUsersTable() {
+    await this._ensureReady();
+    await this.db.exec(`
+      CREATE TABLE IF NOT EXISTS app_user (
+        id TEXT PRIMARY KEY,
+        username TEXT NOT NULL UNIQUE,
+        fullName TEXT NOT NULL,
+        email TEXT NOT NULL UNIQUE,
+        passwordHash TEXT NOT NULL,
+        passwordSalt TEXT NOT NULL,
+        dateOfBirth TEXT NOT NULL,
+        discordId TEXT NOT NULL UNIQUE,
+        rep4repId TEXT NOT NULL UNIQUE,
+        rep4repKey TEXT DEFAULT '',
+        phoneNumber TEXT NOT NULL,
+        credits INTEGER NOT NULL DEFAULT 0,
+        apiToken TEXT NOT NULL UNIQUE,
+        role TEXT NOT NULL DEFAULT 'customer',
+        status TEXT NOT NULL DEFAULT 'pending',
+        lastLoginAt TEXT,
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL
+      )
+    `);
+
+    await this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_app_user_status ON app_user(status)
     `);
   }
 
@@ -152,6 +183,11 @@ class DbWrapper {
 
   getDatabasePath() {
     return this.databasePath;
+  }
+
+  async getConnection() {
+    await this._ensureReady();
+    return this.db;
   }
 
   // Utilitário opcional para logging ou debug

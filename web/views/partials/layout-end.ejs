@@ -4,6 +4,7 @@
         </footer>
     </div>
     <% if (includePanelScript) { %>
+        <script>window.__PANEL_BASE__ = '<%= typeof base !== 'undefined' ? base : '' %>';</script>
         <script src="/panel.js" defer></script>
     <% } %>
 </body>

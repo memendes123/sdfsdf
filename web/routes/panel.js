@@ -3,26 +3,21 @@ const router = express.Router();
 const basicAuth = require('basic-auth');
 const fs = require('fs');
 const path = require('path');
+
 const auth = require('../auth');
+const userStore = require('../services/userStore');
 const {
   autoRun,
   collectUsageStats,
   backupDatabase,
   describeApiError,
 } = require('../../src/util.cjs');
-const userStore = require('../services/userStore');
 
 const LOGS_DIR = path.join(__dirname, '..', '..', 'logs');
 
 userStore.ensureDataFile().catch((error) => {
   console.error('[Painel] Falha ao preparar storage de usuários:', error);
 });
-const auth = require('../auth');
-const {
-    autoRun,
-    collectUsageStats,
-    backupDatabase
-} = require('../../src/util.cjs');
 
 router.use((req, res, next) => {
   const user = basicAuth(req);
@@ -30,6 +25,7 @@ router.use((req, res, next) => {
     res.set('WWW-Authenticate', 'Basic realm="Painel Rep4Rep"');
     return res.status(401).send('Auth required.');
   }
+  res.locals.baseUrl = req.baseUrl || '';
   next();
 });
 
@@ -86,7 +82,7 @@ router.get('/logs', (req, res) => {
   });
 });
 
-router.post('/api/admin/run', async (req, res) => {
+router.post('/api/run', async (req, res) => {
   const { command } = req.body || {};
 
   if (!command) {
@@ -95,8 +91,8 @@ router.post('/api/admin/run', async (req, res) => {
 
   const handlers = {
     autoRun: async () => {
-      await autoRun();
-      return { message: '✅ autoRun concluído. Verifique os logs para detalhes.' };
+      const summary = await autoRun();
+      return { message: '✅ autoRun concluído. Verifique os logs para detalhes.', summary };
     },
     stats: async () => {
       const stats = await collectUsageStats();
@@ -125,7 +121,7 @@ router.post('/api/admin/run', async (req, res) => {
   }
 });
 
-router.get('/api/admin/stats', async (req, res) => {
+router.get('/api/stats', async (req, res) => {
   try {
     const stats = await collectUsageStats();
     res.json({ success: true, stats });
@@ -135,7 +131,7 @@ router.get('/api/admin/stats', async (req, res) => {
   }
 });
 
-router.get('/api/admin/users', async (req, res) => {
+router.get('/api/users', async (req, res) => {
   try {
     const users = await userStore.listUsers();
     res.json({ success: true, users });
@@ -145,7 +141,7 @@ router.get('/api/admin/users', async (req, res) => {
   }
 });
 
-router.post('/api/admin/users', async (req, res) => {
+router.post('/api/users', async (req, res) => {
   try {
     const user = await userStore.createUser(req.body || {});
     res.status(201).json({ success: true, user });
@@ -154,7 +150,7 @@ router.post('/api/admin/users', async (req, res) => {
   }
 });
 
-router.patch('/api/admin/users/:id', async (req, res) => {
+router.patch('/api/users/:id', async (req, res) => {
   const { id } = req.params;
   try {
     const user = await userStore.updateUser(id, req.body || {});
@@ -165,7 +161,7 @@ router.patch('/api/admin/users/:id', async (req, res) => {
   }
 });
 
-router.post('/api/admin/users/:id/credits', async (req, res) => {
+router.post('/api/users/:id/credits', async (req, res) => {
   const { id } = req.params;
   const { delta } = req.body || {};
 
@@ -176,62 +172,6 @@ router.post('/api/admin/users/:id/credits', async (req, res) => {
     const status = error.message.includes('não encontrado') ? 404 : 400;
     res.status(status).json({ success: false, error: error.message });
   }
-router.get('/run/:command', async (req, res) => {
-    const cmd = req.params.command;
-
-    const handlers = {
-        autoRun: async () => {
-            await autoRun();
-            return '✅ autoRun concluído. Verifique os logs para detalhes.';
-        },
-        stats: async () => {
-            const stats = await collectUsageStats();
-            return [
-                '📊 Estatísticas de Uso',
-                `Total de perfis: ${stats.total}`,
-                `Perfis prontos para comentar: ${stats.ready}`,
-                `Perfis aguardando cooldown: ${stats.coolingDown}`,
-                `Comentários nas últimas 24h: ${stats.commentsLast24h}`
-            ].join('\n');
-        },
-        backup: async () => {
-            const filePath = await backupDatabase();
-            if (!filePath) {
-                return '⚠️ Nenhum banco de dados encontrado para backup.';
-            }
-            const filePath = backupDatabase();
-            return `📦 Backup criado em: ${filePath}`;
-        }
-    };
-
-    const handler = handlers[cmd];
-    if (!handler) {
-        return res.status(400).send('❌ Comando inválido.');
-    }
-
-    try {
-        const output = await handler();
-        res.type('text/plain').send(output);
-    } catch (error) {
-        console.error(`[Painel] Falha ao executar comando ${cmd}:`, error);
-        res.status(500).send(`Erro ao executar comando: ${error.message}`);
-    }
-});
-
-router.get('/logs', (req, res) => {
-    const logDir = path.join(__dirname, '..', '..', 'logs');
-
-    if (!fs.existsSync(logDir)) {
-        return res.render('logs', { logs: [] });
-    }
-
-    const files = fs.readdirSync(logDir).filter(f => f.endsWith('.log'));
-    const logs = files.map(f => ({
-        name: f,
-        content: fs.readFileSync(path.join(logDir, f), 'utf8')
-    }));
-
-    res.render('logs', { logs });
 });
 
 module.exports = router;
