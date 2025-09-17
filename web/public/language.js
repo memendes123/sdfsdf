@@ -76,6 +76,25 @@
   }
 
   function cleanGoogleArtifacts() {
+    document.querySelectorAll('.goog-te-banner-frame, .goog-te-banner-frame.skiptranslate').forEach((frame) => {
+      frame.style.display = 'none';
+      if (frame.parentNode) {
+        frame.parentNode.removeChild(frame);
+      }
+    });
+
+    const tooltip = document.getElementById('goog-gt-tt');
+    if (tooltip && tooltip.parentNode) {
+      tooltip.parentNode.removeChild(tooltip);
+    }
+
+    document.querySelectorAll('.goog-te-balloon-frame').forEach((frame) => {
+      frame.style.display = 'none';
+      if (frame.parentNode) {
+        frame.parentNode.removeChild(frame);
+      }
+    });
+
     const bannerFrame = document.querySelector('.goog-te-banner-frame.skiptranslate');
     if (bannerFrame && bannerFrame.parentNode) {
       bannerFrame.parentNode.removeChild(bannerFrame);
@@ -99,6 +118,14 @@
     document.querySelectorAll('.goog-tooltip, .goog-tooltip div').forEach((element) => {
       element.style.display = 'none';
     });
+
+    document.querySelectorAll('.goog-text-highlight').forEach((element) => {
+      element.style.background = 'transparent';
+      element.style.boxShadow = 'none';
+    });
+  }
+
+  const artifactCleanupDelays = [0, 120, 400, 1200, 2400];
   }
 
   const artifactCleanupDelays = [0, 120, 400];
@@ -150,11 +177,26 @@
 
   function setLanguage(lang, { persist = true } = {}) {
     const normalized = isSupported(lang) ? lang : defaultLanguage;
+    const previous = currentLanguage;
     currentLanguage = normalized;
     if (persist) {
       persistLanguage(normalized);
     }
     updateUi(normalized);
+
+    if (normalized === defaultLanguage) {
+      triggerTranslate(normalized);
+      cleanGoogleArtifacts();
+      if (previous !== defaultLanguage) {
+        scheduleArtifactCleanup();
+        window.setTimeout(() => {
+          cleanGoogleArtifacts();
+          window.location.reload();
+        }, 200);
+      }
+      return;
+    }
+
     triggerTranslate(normalized);
   }
 
@@ -271,6 +313,8 @@
       closeDropdown(dropdown, toggle);
     });
   }
+
+  window.addEventListener('load', cleanGoogleArtifacts);
 
   document.addEventListener('DOMContentLoaded', () => {
     setupDropdown();

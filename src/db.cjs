@@ -88,6 +88,31 @@ class DbWrapper extends EventEmitter {
     this.emit('change', payload);
   }
 
+  async checkpoint(mode = 'PASSIVE') {
+    await this._ensureReady();
+    const allowed = new Set(['PASSIVE', 'FULL', 'RESTART', 'TRUNCATE']);
+    const normalized =
+      typeof mode === 'string' && mode.trim() ? mode.trim().toUpperCase() : 'PASSIVE';
+    const target = allowed.has(normalized) ? normalized : 'PASSIVE';
+
+    try {
+      await this.db.exec(`PRAGMA wal_checkpoint(${target})`);
+    } catch (error) {
+      console.warn(`[DB] Falha ao executar wal_checkpoint(${target}):`, error.message);
+    }
+  }
+
+  async vacuumInto(destinationPath) {
+    await this._ensureReady();
+    const target = typeof destinationPath === 'string' ? destinationPath.trim() : '';
+    if (!target) {
+      throw new Error('Destino inválido para o backup.');
+    }
+
+    const escaped = target.replace(/'/g, "''");
+    await this.db.exec(`VACUUM INTO '${escaped}'`);
+  }
+
   recordChange(reason, extra = {}) {
     const type = typeof reason === 'string' && reason.trim() ? reason.trim() : 'change';
     this._emitChange({ type, ...extra });
@@ -220,6 +245,64 @@ class DbWrapper extends EventEmitter {
         );
       }
 
+      let changeType = existingProfile ? 'profile.update' : 'profile.insert';
+      let result = null;
+
+      if (existingProfile) {
+        result = await this.db.run(
+          `UPDATE steamprofile
+             SET username = ?, password = ?, sharedSecret = ?, steamId = ?, cookies = ?
+           WHERE id = ?`,
+          [username, password, sharedSecret || null, steamId, serializedCookies, existingProfile.id],
+        );
+      } else {
+        try {
+          result = await this.db.run(
+            `INSERT INTO steamprofile (username, password, sharedSecret, steamId, cookies)
+             VALUES (?, ?, ?, ?, ?)`,
+            [username, password, sharedSecret || null, steamId, serializedCookies],
+          );
+        } catch (error) {
+          if (
+            steamId &&
+            /UNIQUE constraint failed: steamprofile\.steamId/.test(error?.message || '')
+          ) {
+            const conflicting = await this.db.get(
+              `SELECT id, steamId, username FROM steamprofile WHERE steamId = ?`,
+              [steamId],
+            );
+            if (conflicting) {
+              existingProfile = conflicting;
+              changeType = 'profile.update';
+              result = await this.db.run(
+                `UPDATE steamprofile
+                   SET username = ?, password = ?, sharedSecret = ?, steamId = ?, cookies = ?
+                 WHERE id = ?`,
+                [
+                  username,
+                  password,
+                  sharedSecret || null,
+                  steamId,
+                  serializedCookies,
+                  conflicting.id,
+                ],
+              );
+            } else {
+              throw error;
+            }
+          } else {
+            throw error;
+          }
+        }
+      }
+
+      console.log(`✅ Perfil ${username} adicionado/atualizado.`);
+      if (result?.changes > 0) {
+        const steamRef = steamId || existingProfile?.steamId || null;
+        this._emitChange({ type: changeType, username, steamId: steamRef });
+      }
+
+      await this.checkpoint('PASSIVE');
       const result = await this.db.run(`
         INSERT INTO steamprofile (username, password, sharedSecret, steamId, cookies)
         VALUES (?, ?, ?, ?, ?)
@@ -238,6 +321,7 @@ class DbWrapper extends EventEmitter {
       return result;
     } catch (err) {
       console.error("❌ Erro ao adicionar/atualizar perfil:", err.message);
+      throw err;
     }
   }
 
@@ -251,6 +335,7 @@ class DbWrapper extends EventEmitter {
     if (result.changes > 0) {
       console.log(`🗑️ Perfil '${username}' removido.`);
       this._emitChange({ type: 'profile.remove', username });
+      await this.checkpoint('PASSIVE');
     } else {
       console.log(`⚠️ Nenhum perfil encontrado com username '${username}'.`);
     }

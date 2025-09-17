@@ -1360,6 +1360,7 @@ async function prioritizedAutoRun(options = {}) {
     const clientToken = resolveApiToken(client.rep4repKey, {
       fallbackToEnv: client.role === 'admin',
     });
+
     const clientToken = resolveApiToken(client.rep4repKey, { fallbackToEnv: false });
     if (!clientToken) {
       return failQueuedJob(
@@ -1964,7 +1965,18 @@ async function backupDatabase() {
   const dest = path.join(BACKUPS_DIR, `db-${timestamp}.sqlite`);
 
   try {
-    fs.copyFileSync(src, dest);
+    await db.checkpoint('FULL');
+    try {
+      await db.vacuumInto(dest);
+    } catch (vacuumError) {
+      log(`⚠️ VACUUM INTO falhou (${vacuumError.message}). Tentando cópia direta...`);
+      try {
+        fs.rmSync(dest, { force: true });
+      } catch (rmError) {
+        // Ignora falhas ao remover arquivo parcialmente gerado
+      }
+      fs.copyFileSync(src, dest);
+    }
   } catch (error) {
     log(`❌ Falha ao criar backup: ${error.message}`, true);
     return null;
