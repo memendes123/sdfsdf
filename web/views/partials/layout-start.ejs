@@ -20,9 +20,20 @@
                     <p class="brand__subtitle">Automação segura para o ecossistema Rep4Rep</p>
                 </div>
             </div>
-            <nav class="app-nav">
-                <a href="<%= base %>/" class="app-nav__link <%= page === 'dashboard' ? 'is-active' : '' %>">Dashboard</a>
-                <a href="<%= base %>/logs" class="app-nav__link <%= page === 'logs' ? 'is-active' : '' %>">Logs</a>
-            </nav>
+            <div class="app-header__right">
+                <nav class="app-nav">
+                    <a href="<%= base %>/" class="app-nav__link <%= page === 'dashboard' ? 'is-active' : '' %>">Dashboard</a>
+                    <a href="<%= base %>/logs" class="app-nav__link <%= page === 'logs' ? 'is-active' : '' %>">Logs</a>
+                </nav>
+                <div class="language-switch" data-language-switch>
+                    <button type="button" class="btn btn--ghost" data-translate-toggle aria-haspopup="true" aria-expanded="false">
+                        🌐 <span>Idioma</span>
+                    </button>
+                    <div class="language-switch__dropdown" data-translate-container hidden>
+                        <div id="google_translate_element" class="language-switch__widget"></div>
+                        <p class="language-switch__hint">Tradução automática via Google Translate.</p>
+                    </div>
+                </div>
+            </div>
         </header>
         <main class="app-main">

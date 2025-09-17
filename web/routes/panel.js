@@ -7,9 +7,12 @@ const path = require('path');
 const auth = require('../auth');
 const userStore = require('../services/userStore');
 const {
-  autoRun,
+  prioritizedAutoRun,
   collectUsageStats,
   backupDatabase,
+  startKeepAliveLoop,
+  stopKeepAliveLoop,
+  getKeepAliveStatus,
   describeApiError,
 } = require('../../src/util.cjs');
 
@@ -91,8 +94,18 @@ router.post('/api/run', async (req, res) => {
 
   const handlers = {
     autoRun: async () => {
-      const summary = await autoRun();
-      return { message: '✅ autoRun concluído. Verifique os logs para detalhes.', summary };
+      const adminUser = await userStore.findActiveAdmin();
+      if (!adminUser || !adminUser.rep4repKey) {
+        throw new Error('Configure a chave Rep4Rep no perfil admin antes de executar.');
+      }
+
+      const summary = await prioritizedAutoRun({
+        ownerToken: adminUser.rep4repKey,
+        accountLimit: 100,
+        maxCommentsPerAccount: 1000,
+        clientFilter: (user) => user.role !== 'admin',
+      });
+      return { message: '✅ Execução concluída com prioridade.', summary };
     },
     stats: async () => {
       const stats = await collectUsageStats();
@@ -104,6 +117,29 @@ router.post('/api/run', async (req, res) => {
         return { message: '⚠️ Nenhum banco de dados encontrado para backup.' };
       }
       return { message: `📦 Backup criado em: ${filePath}`, filePath };
+    },
+    watchdogStart: async () => {
+      const adminUser = await userStore.findActiveAdmin();
+      if (!adminUser || !adminUser.rep4repKey) {
+        throw new Error('Defina a chave Rep4Rep na conta admin para iniciar o vigia.');
+      }
+      const result = await startKeepAliveLoop({ ownerToken: adminUser.rep4repKey });
+      const status = getKeepAliveStatus();
+      const message = result.alreadyRunning
+        ? '⚠️ O modo vigia já está ativo.'
+        : '🛡️ Modo vigia ativado. Executará automaticamente no intervalo configurado.';
+      return { message, watchdog: status };
+    },
+    watchdogStop: async () => {
+      const result = await stopKeepAliveLoop();
+      const status = getKeepAliveStatus();
+      const message = result.stopped
+        ? '⏹️ Modo vigia encerrado.'
+        : '⚠️ O modo vigia já estava inativo.';
+      return { message, watchdog: status };
+    },
+    watchdogStatus: async () => {
+      return { message: 'Status do vigia atualizado.', watchdog: getKeepAliveStatus() };
     },
   };
 
@@ -139,6 +175,10 @@ router.get('/api/users', async (req, res) => {
     console.error('[Painel] Falha ao listar usuários:', error);
     res.status(500).json({ success: false, error: 'Não foi possível carregar os usuários.' });
   }
+});
+
+router.get('/api/watchdog', (req, res) => {
+  res.json({ success: true, watchdog: getKeepAliveStatus() });
 });
 
 router.post('/api/users', async (req, res) => {
