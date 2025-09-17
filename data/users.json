@@ -1,0 +1,14 @@
+[
+  {
+    "id": "demo-user",
+    "displayName": "Cliente Demo",
+    "email": "demo@example.com",
+    "rep4repKey": "",
+    "credits": 10,
+    "status": "active",
+    "role": "customer",
+    "notes": "Exemplo inicial. Atualize ou remova pelo painel.",
+    "createdAt": "2024-01-01T00:00:00.000Z",
+    "updatedAt": "2024-01-01T00:00:00.000Z"
+  }
+]

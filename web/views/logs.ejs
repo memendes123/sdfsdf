@@ -1,11 +1,27 @@
-<!DOCTYPE html>
-<html>
-<head><title>Logs</title></head>
-<body>
-<h2>📜 Logs</h2>
-<% logs.forEach(log => { %>
-    <h3><%= log.name %></h3>
-    <pre><%= log.content %></pre>
-<% }) %>
-</body>
-</html>
+<%- include('partials/layout-start', { title: title || 'Logs', page }) %>
+<section class="card card--full">
+    <header class="card__header">
+        <div>
+            <h1>Histórico de execuções</h1>
+            <p>Acompanhe os registros gerados pelo bot e pelo painel web. Os arquivos são ordenados do mais recente para o mais antigo.</p>
+        </div>
+    </header>
+    <div class="card__body logs-body">
+        <% if (!logs.length) { %>
+            <p class="is-muted">Nenhum log encontrado ainda. Execute algum comando para gerar registros.</p>
+        <% } else { %>
+            <div class="logs-grid">
+                <% logs.forEach(function(log) { %>
+                    <article class="log-entry">
+                        <header class="log-entry__header">
+                            <h2><%= log.name %></h2>
+                            <span><%= log.updatedAt.toLocaleString('pt-BR') %></span>
+                        </header>
+                        <pre><%= log.content %></pre>
+                    </article>
+                <% }) %>
+            </div>
+        <% } %>
+    </div>
+</section>
+<%- include('partials/layout-end', { includePanelScript: false }) %>

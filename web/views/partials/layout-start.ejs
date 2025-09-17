@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title><%= title ? `${title} · ${siteName || 'Rep4Rep Control Center'}` : (siteName || 'Rep4Rep Control Center') %></title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+    <div class="app-shell">
+        <header class="app-header">
+            <div class="brand">
+                <span class="brand__logo">R4R</span>
+                <div>
+                    <p class="brand__name"><%= siteName || 'Rep4Rep Control Center' %></p>
+                    <p class="brand__subtitle">Automação segura para o ecossistema Rep4Rep</p>
+                </div>
+            </div>
+            <nav class="app-nav">
+                <a href="/" class="app-nav__link <%= page === 'dashboard' ? 'is-active' : '' %>">Dashboard</a>
+                <a href="/logs" class="app-nav__link <%= page === 'logs' ? 'is-active' : '' %>">Logs</a>
+            </nav>
+        </header>
+        <main class="app-main">

@@ -21,14 +21,16 @@ Automação de comentários no Steam via integração com o [Rep4Rep.com](https:
 ```
 📦 root
 ├── main.cjs               # Interface CLI
-├── util.cjs               # Funções principais do bot
-├── api.cjs                # Wrapper para API do Rep4Rep
-├── steamBot.cjs           # Lógica de login e comentários Steam
-├── db.cjs                 # Banco de dados SQLite
-├── web/                   # Painel web em Express.js
+├── src/
+│   ├── util.cjs           # Funções principais do bot
+│   ├── api.cjs            # Wrapper para API do Rep4Rep
+│   ├── steamBot.cjs       # Lógica de login e comentários Steam
+│   └── db.cjs             # Banco de dados SQLite
+├── web/                   # Painel web (Express + EJS + CSS/JS)
+├── data/users.json        # Base de clientes/créditos (preview)
 ├── accounts.txt           # Lista de contas Steam
 ├── .env                   # Configuração do bot
-├── db.sqlite              # Banco de dados de perfis
+├── steamprofiles.db       # Banco de dados de perfis
 └── logs/                  # Logs automáticos do bot
 ```
 
@@ -61,8 +63,10 @@ Automação de comentários no Steam via integração com o [Rep4Rep.com](https:
 ### 📁 Local: `web/server.js`
 
 **Recursos:**
-- Botões para iniciar tarefas via navegador
-- Visualização dos últimos logs
+- Layout moderno, responsivo e com feedback visual das ações
+- Botões para autoRun, estatísticas e backup com resultado em tempo real
+- Pré-visualização de um módulo de clientes/créditos (pensado para o futuro painel público)
+- Visualização dos últimos logs em cartões elegantes
 - Autenticação com login e senha via `.env`
 
 ### ✅ Acesso:
@@ -82,7 +86,10 @@ LOGIN_DELAY=30000
 # Tempo entre comentários (em ms)
 COMMENT_DELAY=15000
 
-# Login do painel web
+# Quantidade máxima de comentários por perfil a cada execução
+MAX_COMMENTS_PER_RUN=10
+
+# Login do painel web (ou use PANEL_USER/PANEL_PASS para retrocompatibilidade)
 PANEL_USERNAME=admin
 PANEL_PASSWORD=senha123
 ```
@@ -93,10 +100,20 @@ PANEL_PASSWORD=senha123
 
 | Comando        | Descrição                           |
 |----------------|-------------------------------------|
-| `npm run bot`  | Inicia apenas o bot (CLI)           |
-| `npm run painel` | Inicia o painel Web                |
-| `npm run dev`  | Inicia bot e painel ao mesmo tempo  |
-| `npm start`    | Abre o navegador + bot + painel     |
+| `npm run bot`     | Inicia apenas o bot (CLI)           |
+| `npm run painel`  | Inicia o painel Web                |
+| `npm run dev`     | Inicia bot e painel ao mesmo tempo  |
+| `npm start`       | Abre o navegador + bot + painel     |
+
+### 💳 Gestão de créditos (preview)
+
+O painel agora traz um módulo experimental para administrar clientes e créditos (pensado para a futura monetização):
+
+- Arquivo `data/users.json` com os cadastros. Um seed "Cliente Demo" é criado automaticamente.
+- Formulário para adicionar clientes, e botões para ajustar créditos em tempo real.
+- Essa base ainda é interna (apenas o administrador vê), mas já foi projetada para evoluir para um portal onde o cliente terá login próprio.
+
+> **Dica:** mantenha o arquivo `data/users.json` fora do controle de versão público quando for trabalhar com dados reais.
 
 ---
 
