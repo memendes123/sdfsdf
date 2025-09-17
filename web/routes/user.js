@@ -84,7 +84,6 @@ router.use(async (req, res, next) => {
     const user = await userStore.authenticateUser({ userId, token });
     if (!user) {
       return res.status(401).json({ success: false, error: 'Credenciais inválidas ou conta inativa.' });
-      return res.status(401).json({ success: false, error: 'Credenciais inválidas.' });
     }
     req.user = user;
     next();
@@ -200,6 +199,7 @@ router.post('/run', async (req, res) => {
     }
 
     const cleanup = await removeRemoteProfiles(summary, {
+      apiClient: rep4repApi,
       apiToken: req.user.rep4repKey,
     });
 
