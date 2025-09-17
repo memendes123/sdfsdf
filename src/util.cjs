@@ -10,6 +10,7 @@ const db = require('./db.cjs');
 const api = require('./api.cjs');
 const { ApiError } = require('./api.cjs');
 const createSteamBot = require('./steamBot.cjs');
+const userStore = require('../web/services/userStore');
 
 const ROOT_DIR = path.join(__dirname, '..');
 const DATA_DIR = path.join(ROOT_DIR, 'data');
@@ -20,12 +21,13 @@ const EXPORTS_DIR = path.join(DATA_DIR, 'exports');
 
 const DEFAULT_LOGIN_DELAY = 30_000;
 const DEFAULT_COMMENT_DELAY = 15_000;
-const MAX_COMMENTS_PER_RUN = sanitizePositiveInteger(
+const configuredMaxComments = sanitizePositiveInteger(
   process.env.MAX_COMMENTS_PER_RUN ??
     process.env.COMMENT_LIMIT ??
     process.env.MAX_COMMENTS,
   10,
 );
+const MAX_COMMENTS_PER_RUN = Math.min(1000, configuredMaxComments);
 
 let rl = null;
 
@@ -291,6 +293,37 @@ async function removeFromRep4Rep(steamId, options = {}) {
   }
 }
 
+function extractSteamIdsFromSummary(summary) {
+  if (!summary || !Array.isArray(summary.perAccount)) {
+    return [];
+  }
+
+  const ids = summary.perAccount
+    .map((item) => (item && item.steamId ? String(item.steamId) : null))
+    .filter(Boolean);
+  return [...new Set(ids)];
+}
+
+async function removeRemoteProfiles(summary, options = {}) {
+  const { apiClient = api, apiToken = null } = options;
+  const steamIds = extractSteamIdsFromSummary(summary);
+  if (!steamIds.length) {
+    return { attempted: 0, removed: 0 };
+  }
+
+  let removed = 0;
+  for (const steamId of steamIds) {
+    try {
+      await apiClient.removeSteamProfile(steamId, { token: apiToken });
+      removed += 1;
+    } catch (error) {
+      log(`[Rep4Rep] Falha ao remover ${steamId} após execução: ${describeApiError(error)}`);
+    }
+  }
+
+  return { attempted: steamIds.length, removed };
+}
+
 async function showAllProfiles() {
   const profiles = await db.getAllProfiles();
   if (!profiles.length) {
@@ -317,12 +350,21 @@ async function addProfilesFromFile(options = {}) {
     return { added: 0, total: 0 };
   }
 
+  const limit = Number.isFinite(options.limitAccounts)
+    ? Math.max(1, Math.floor(options.limitAccounts))
+    : null;
+  const selectedAccounts = limit ? accounts.slice(0, limit) : accounts;
+  if (!selectedAccounts.length) {
+    log('Nenhuma conta disponível após aplicar o limite configurado.');
+    return { added: 0, total: 0 };
+  }
+
   const existingProfiles = await db.getAllProfiles();
   const knownUsers = new Set(existingProfiles.map((profile) => profile.username));
 
   let added = 0;
 
-  for (const line of accounts) {
+  for (const line of selectedAccounts) {
     let account;
     try {
       account = parseAccountLine(line);
@@ -374,12 +416,46 @@ async function addProfilesFromFile(options = {}) {
   }
 
   log(`Processo concluído. ${added} novo(s) perfil(is) adicionados.`);
-  return { added, total: accounts.length };
+  return { added, total: selectedAccounts.length };
 }
 
 async function addProfilesAndRun(options = {}) {
   await addProfilesFromFile(options);
   return autoRun(options);
+}
+
+async function runFullCycle(options = {}) {
+  const maxAccounts = Number.isFinite(options.maxAccounts)
+    ? Math.min(100, Math.max(1, Math.floor(options.maxAccounts)))
+    : 100;
+  const maxComments = Math.min(
+    1000,
+    Math.max(1, options.maxCommentsPerAccount ?? MAX_COMMENTS_PER_RUN),
+  );
+  const apiClient = options.apiClient || api;
+  const apiToken = options.apiToken ?? null;
+
+  log(
+    `Iniciando fluxo completo com até ${maxAccounts} contas e ${maxComments} comentários por conta.`,
+  );
+
+  const addResult = await addProfilesFromFile({
+    ...options,
+    limitAccounts: maxAccounts,
+    apiClient,
+    apiToken,
+  });
+
+  const summary = await autoRun({
+    ...options,
+    apiClient,
+    apiToken,
+    maxCommentsPerAccount: maxComments,
+    accountLimit: maxAccounts,
+  });
+
+  const cleanup = await removeRemoteProfiles(summary, { apiClient, apiToken });
+  return { addResult, summary, cleanup };
 }
 
 function resolveRemoteProfileId(remoteProfile) {
@@ -492,11 +568,20 @@ async function autoRun(options = {}) {
     loginDelay = sanitizeDelay(process.env.LOGIN_DELAY, DEFAULT_LOGIN_DELAY),
     onTaskComplete,
     filterProfiles,
+    accountLimit = null,
+    onFinish,
   } = options;
 
   const accounts = readAccountsFile();
   if (!accounts.length) {
     log('Nenhuma conta configurada no accounts.txt. Adicione contas antes de executar o autoRun.', true);
+    return { totalComments: 0, perAccount: [] };
+  }
+
+  const limit = Number.isFinite(accountLimit) ? Math.max(1, Math.floor(accountLimit)) : null;
+  const selectedAccounts = limit ? accounts.slice(0, limit) : accounts;
+  if (!selectedAccounts.length) {
+    log('Nenhuma conta disponível para execução após aplicar o limite configurado.', true);
     return { totalComments: 0, perAccount: [] };
   }
 
@@ -524,7 +609,7 @@ async function autoRun(options = {}) {
   const remoteMap = new Map(remoteProfiles.map((remote) => [String(remote.steamId), remote]));
   const summary = { totalComments: 0, perAccount: [] };
 
-  for (const [index, accountLine] of accounts.entries()) {
+  for (const [index, accountLine] of selectedAccounts.entries()) {
     let account;
     try {
       account = parseAccountLine(accountLine);
@@ -636,12 +721,19 @@ async function autoRun(options = {}) {
       break;
     }
 
-    if (index < accounts.length - 1) {
+    if (index < selectedAccounts.length - 1) {
       await sleep(loginDelay);
     }
   }
 
   log(`✅ autoRun concluído. Total de comentários enviados: ${summary.totalComments}`);
+  if (typeof onFinish === 'function') {
+    try {
+      await onFinish(summary);
+    } catch (error) {
+      log(`⚠️ Callback onFinish falhou: ${error.message}`);
+    }
+  }
   return summary;
 }
 
@@ -698,6 +790,127 @@ async function removeProfile(username, options = {}) {
   await db.removeProfile(user);
   removeFromAccountsFile(user);
   log(`[${user}] Removido do sistema.`);
+}
+
+async function prioritizedAutoRun(options = {}) {
+  const {
+    ownerToken = process.env.REP4REP_KEY ?? null,
+    maxCommentsPerAccount = MAX_COMMENTS_PER_RUN,
+    accountLimit = 100,
+    clientFilter,
+    onClientProcessed,
+    ...runOverrides
+  } = options;
+
+  const maxComments = Math.min(1000, Math.max(1, maxCommentsPerAccount));
+  const baseRunOptions = {
+    ...runOverrides,
+    maxCommentsPerAccount: maxComments,
+    accountLimit,
+  };
+
+  const result = { owner: null, clients: [] };
+
+  if (ownerToken) {
+    log('🚀 Executando lote prioritário do proprietário...');
+    try {
+      const summary = await autoRun({ ...baseRunOptions, apiToken: ownerToken });
+      result.owner = summary;
+      if (summary.totalComments > 0) {
+        log('Pedidos do proprietário atendidos. Clientes serão processados posteriormente.');
+        return result;
+      }
+    } catch (error) {
+      log(`❌ Falha ao executar autoRun prioritário: ${error.message}`);
+    }
+  } else {
+    log('⚠️ Nenhum token do proprietário configurado. Pulando etapa prioritária.');
+  }
+
+  let users = [];
+  try {
+    users = await userStore.listUsers();
+  } catch (error) {
+    log(`❌ Falha ao carregar usuários para fila de clientes: ${error.message}`);
+    return result;
+  }
+
+  const eligibleClients = users.filter((user) => {
+    if (typeof clientFilter === 'function' && !clientFilter(user)) {
+      return false;
+    }
+    if (!user.rep4repKey) {
+      return false;
+    }
+    if (user.status !== 'active') {
+      return false;
+    }
+    if (user.role === 'admin') {
+      return true;
+    }
+    return user.credits > 0;
+  });
+
+  for (const client of eligibleClients) {
+    const isAdmin = client.role === 'admin';
+    const creditLimit = isAdmin ? Infinity : client.credits;
+    let usedCredits = 0;
+
+    log(`🧾 Processando cliente ${client.username} (${client.id}).`);
+    try {
+      const summary = await autoRun({
+        ...baseRunOptions,
+        apiToken: client.rep4repKey,
+        onTaskComplete: () => {
+          if (isAdmin) {
+            return true;
+          }
+          usedCredits += 1;
+          return usedCredits < creditLimit;
+        },
+      });
+
+      const consumed = isAdmin
+        ? summary.totalComments
+        : Math.min(summary.totalComments ?? usedCredits, creditLimit);
+
+      if (!isAdmin && consumed > 0) {
+        try {
+          await userStore.consumeCredits(client.id, consumed);
+        } catch (creditError) {
+          log(`⚠️ Falha ao debitar créditos de ${client.username}: ${creditError.message}`);
+        }
+      }
+
+      const cleanup = await removeRemoteProfiles(summary, {
+        apiToken: client.rep4repKey,
+        apiClient: baseRunOptions.apiClient || api,
+      });
+
+      const clientResult = { client, summary, creditsConsumed: isAdmin ? 0 : consumed, cleanup };
+      result.clients.push(clientResult);
+      if (typeof onClientProcessed === 'function') {
+        try {
+          await onClientProcessed(clientResult);
+        } catch (callbackError) {
+          log(`⚠️ onClientProcessed falhou: ${callbackError.message}`);
+        }
+      }
+
+      if (summary.totalComments > 0) {
+        log(`✅ Execução concluída para ${client.username}.`);
+        break;
+      }
+    } catch (error) {
+      log(`❌ Falha ao processar ${client.username}: ${error.message}`);
+    }
+  }
+
+  if (!result.clients.length) {
+    log('Nenhum cliente elegível para processamento neste ciclo.');
+  }
+
+  return result;
 }
 
 async function checkAndSyncProfiles(options = {}) {
@@ -938,6 +1151,7 @@ module.exports = {
   logInvalidAccount,
   removeFromAccountsFile,
   removeFromRep4Rep,
+  removeRemoteProfiles,
   loginWithRetries,
   statusMessage,
   showAllProfiles,
@@ -947,6 +1161,8 @@ module.exports = {
   autoRun,
   addProfilesFromFile,
   addProfilesAndRun,
+  runFullCycle,
+  prioritizedAutoRun,
   checkAndSyncProfiles,
   checkCommentAvailability,
   verifyProfileStatus,
