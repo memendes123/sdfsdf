@@ -2,7 +2,13 @@ const express = require('express');
 const router = express.Router();
 
 const userStore = require('../services/userStore');
-const { autoRun, collectUsageStats } = require('../../src/util.cjs');
+const {
+  autoRun,
+  collectUsageStats,
+  removeRemoteProfiles,
+  describeApiError,
+} = require('../../src/util.cjs');
+const rep4repApi = require('../../src/api.cjs');
 
 function extractAuth(req) {
   const authHeader = req.header('authorization');
@@ -124,11 +130,6 @@ router.patch('/me', async (req, res) => {
   }
 });
 
-      rep4repKey: user.rep4repKey,
-    },
-  });
-});
-
 router.post('/run', async (req, res) => {
   const { command = 'autoRun' } = req.body || {};
   const allowedCommands = new Set(['autoRun', 'stats']);
@@ -145,11 +146,13 @@ router.post('/run', async (req, res) => {
     }
   }
 
+  const isAdmin = req.user.role === 'admin';
+
   if (req.user.status !== 'active') {
     return res.status(403).json({ success: false, error: 'Conta ainda não ativada. Aguarde a liberação pelo administrador.' });
   }
 
-  if (req.user.credits <= 0) {
+  if (!isAdmin && req.user.credits <= 0) {
     return res.status(402).json({ success: false, error: 'Créditos insuficientes.' });
   }
 
@@ -157,26 +160,48 @@ router.post('/run', async (req, res) => {
     return res.status(400).json({ success: false, error: 'Defina a chave Rep4Rep antes de executar comandos.' });
   }
 
-  const creditLimit = req.user.credits;
+  let remoteProfiles;
+  try {
+    remoteProfiles = await rep4repApi.getSteamProfiles({ token: req.user.rep4repKey });
+  } catch (error) {
+    return res.status(502).json({ success: false, error: describeApiError(error) });
+  }
+
+  if (!Array.isArray(remoteProfiles) || remoteProfiles.length === 0) {
+    return res.status(400).json({
+      success: false,
+      error: 'Nenhum perfil Rep4Rep encontrado. Adicione contas antes de executar o comando.',
+    });
+  }
+
+  const creditLimit = isAdmin ? Infinity : req.user.credits;
   let usedCredits = 0;
 
   try {
     const summary = await autoRun({
       apiToken: req.user.rep4repKey,
+      maxCommentsPerAccount: 1000,
+      accountLimit: 100,
       onTaskComplete: () => {
-        usedCredits += 1;
-        if (usedCredits >= creditLimit) {
-          return false;
+        if (isAdmin) {
+          return true;
         }
-        return true;
+        usedCredits += 1;
+        return usedCredits < creditLimit;
       },
     });
 
-    const consumed = Math.min(summary.totalComments ?? usedCredits, creditLimit);
+    const consumed = isAdmin
+      ? summary.totalComments ?? 0
+      : Math.min(summary.totalComments ?? usedCredits, creditLimit);
     let updatedUser = req.user;
-    if (consumed > 0) {
+    if (!isAdmin && consumed > 0) {
       updatedUser = await userStore.consumeCredits(req.user.id, consumed);
     }
+
+    const cleanup = await removeRemoteProfiles(summary, {
+      apiToken: req.user.rep4repKey,
+    });
 
     res.json({
       success: true,
@@ -184,6 +209,7 @@ router.post('/run', async (req, res) => {
       summary,
       creditsConsumed: consumed,
       remainingCredits: updatedUser.credits,
+      cleanup,
     });
   } catch (error) {
     if (/Créditos insuficientes/.test(error.message)) {
