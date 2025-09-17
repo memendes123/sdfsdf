@@ -1,7 +1,6 @@
-const { fork } = require('child_process');
+const { fork, spawn } = require('child_process');
 const path = require('path');
 const minimist = require('minimist');
-const open = require('open');
 
 const args = minimist(process.argv.slice(2), {
   boolean: ['no-browser', 'nobrowser', 'noBrowser'],
@@ -10,10 +9,11 @@ const args = minimist(process.argv.slice(2), {
   },
 });
 
-const hasNoBrowserFlag = Object.prototype.hasOwnProperty.call(args, 'no-browser');
+const hasNoBrowserFlag = args['no-browser'] === true;
 const disableBrowser =
   hasNoBrowserFlag ||
   args.browser === false ||
+  args.browser === 'false' ||
   args.nobrowser === true ||
   args.noBrowser === true;
 
@@ -23,12 +23,45 @@ const botPath = path.join(__dirname, 'main.cjs');
 const panelPath = path.join(__dirname, 'web', 'server.js');
 const port = process.env.PORT || 3000;
 
-let openModulePromise = null;
-function loadOpenModule() {
-  if (!openModulePromise) {
-    openModulePromise = import('open').then((module) => module.default || module);
+function determineOpenCommand(url) {
+  if (process.platform === 'win32') {
+    return {
+      command: 'cmd',
+      args: ['/c', 'start', '', url],
+    };
   }
-  return openModulePromise;
+
+  if (process.platform === 'darwin') {
+    return {
+      command: 'open',
+      args: [url],
+    };
+  }
+
+  return {
+    command: 'xdg-open',
+    args: [url],
+  };
+}
+
+function tryOpenBrowser(url) {
+  const { command, args } = determineOpenCommand(url);
+
+  return new Promise((resolve, reject) => {
+    let child;
+    try {
+      child = spawn(command, args, { stdio: 'ignore', detached: true });
+    } catch (error) {
+      reject(error);
+      return;
+    }
+
+    child.once('error', reject);
+    child.once('spawn', () => {
+      child.unref();
+      resolve();
+    });
+  });
 }
 
 console.log('[🔁] Iniciando BOT...');
@@ -50,12 +83,11 @@ process.on('SIGTERM', shutdown);
 if (shouldOpenBrowser) {
   setTimeout(() => {
     console.log('[🚀] Abrindo navegador...');
-    loadOpenModule()
-      .then((openBrowser) => openBrowser(`http://localhost:${port}`))
-      .catch((error) => {
-        console.error('[❌] Não foi possível abrir o navegador automaticamente:', error);
-        console.log('[ℹ️] Acesse manualmente:', `http://localhost:${port}`);
-      });
+    const url = `http://localhost:${port}`;
+    tryOpenBrowser(url).catch((error) => {
+      console.error('[❌] Não foi possível abrir o navegador automaticamente:', error);
+      console.log('[ℹ️] Acesse manualmente:', url);
+    });
   }, 2000);
 } else {
   console.log(

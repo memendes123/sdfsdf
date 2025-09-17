@@ -197,12 +197,6 @@ router.post('/run', async (req, res) => {
 
   const sanitizedMax = sanitizeOptionalLimit(maxCommentsPerAccount, DEFAULT_MAX_COMMENTS, 1000);
   const sanitizedAccounts = sanitizeOptionalLimit(accountLimit, DEFAULT_ACCOUNT_LIMIT, 100);
-  const sanitizedMax = Number.isFinite(Number(maxCommentsPerAccount))
-    ? Math.max(1, Math.min(1000, Math.floor(Number(maxCommentsPerAccount))))
-    : DEFAULT_MAX_COMMENTS;
-  const sanitizedAccounts = Number.isFinite(Number(accountLimit))
-    ? Math.max(1, Math.min(100, Math.floor(Number(accountLimit))))
-    : DEFAULT_ACCOUNT_LIMIT;
 
   try {
     const enqueue = await runQueue.enqueueJob({
