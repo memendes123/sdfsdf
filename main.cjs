@@ -8,6 +8,8 @@ const {
     autoRun,
     addProfilesFromFile,
     addProfilesAndRun,
+    runFullCycle,
+    prioritizedAutoRun,
     checkAndSyncProfiles,
     checkCommentAvailability,
     verifyProfileStatus,
@@ -31,7 +33,7 @@ async function mainMenu() {
     log("==================");
     log("1. Mostrar perfis");
     log("2. Autorizar todos perfis");
-    log("3. Executar autoRun");
+    log("3. Executar autoRun prioritário");
     log("4. Adicionar perfis do arquivo");
     log("5. Adicionar perfis e rodar");
     log("6. Remover perfil");
@@ -43,6 +45,7 @@ async function mainMenu() {
     log("12. Estatísticas de uso");
     log("13. Resetar cookies dos perfis");
     log("14. Backup do banco de dados");
+    log("15. Ciclo completo (adicionar, rodar e remover)");
     log("0. Sair", true);
 
     rl.question("Escolha uma opção: ", async (opt) => {
@@ -54,13 +57,23 @@ async function mainMenu() {
                 await authAllProfiles();
                 break;
             case "3":
-                await autoRun();
+                await prioritizedAutoRun({
+                    accountLimit: 100,
+                    maxCommentsPerAccount: 1000,
+                    clientFilter: (user) => user.role !== 'admin',
+                });
                 break;
             case "4":
                 await addProfilesFromFile();
                 break;
             case "5":
                 await addProfilesAndRun();
+                break;
+            case "15":
+                await runFullCycle({
+                    maxAccounts: 100,
+                    maxCommentsPerAccount: 1000,
+                });
                 break;
             case "6":
                 rl.question("Usuário a remover: ", async (username) => {
