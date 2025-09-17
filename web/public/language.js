@@ -28,18 +28,36 @@
     return defaultLanguage;
   }
 
+  function getCookieDomains() {
+    const host = window.location.hostname;
+    const isIp = /^\d+(?:\.\d+){3}$/.test(host);
+    const domains = [''];
+
+    if (host && host.includes('.') && !isIp) {
+      domains.push(`.${host.replace(/^www\./i, '')}`);
+    }
+
+    return domains;
+  }
+
   function setCookie(name, value) {
     const expires = new Date();
     expires.setFullYear(expires.getFullYear() + 1);
     const encodedValue = encodeURIComponent(value);
-    document.cookie = `${name}=${encodedValue};expires=${expires.toUTCString()};path=/`;
+    const cookie = `${name}=${encodedValue};expires=${expires.toUTCString()};path=/`;
 
-    const host = window.location.hostname;
-    const isIp = /^\d+(?:\.\d+){3}$/.test(host);
-    if (host && host.includes('.') && !isIp) {
-      const domain = host.replace(/^www\./i, '');
-      document.cookie = `${name}=${encodedValue};expires=${expires.toUTCString()};path=/;domain=.${domain}`;
-    }
+    getCookieDomains().forEach((domain) => {
+      const domainSuffix = domain ? `;domain=${domain}` : '';
+      document.cookie = `${cookie}${domainSuffix}`;
+    });
+  }
+
+  function deleteCookie(name) {
+    const expires = new Date(0).toUTCString();
+    getCookieDomains().forEach((domain) => {
+      const domainSuffix = domain ? `;domain=${domain}` : '';
+      document.cookie = `${name}=;expires=${expires};path=/${domainSuffix}`;
+    });
   }
 
   function updateUi(lang) {
@@ -77,6 +95,10 @@
       element.style.opacity = '0';
       element.style.pointerEvents = 'none';
     });
+
+    document.querySelectorAll('.goog-tooltip, .goog-tooltip div').forEach((element) => {
+      element.style.display = 'none';
+    });
   }
 
   const artifactCleanupDelays = [0, 120, 400];
@@ -92,8 +114,9 @@
       if (!combo) {
         return false;
       }
-      if (combo.value !== lang) {
-        combo.value = lang;
+      const targetValue = lang === defaultLanguage ? '' : lang;
+      if (combo.value !== targetValue) {
+        combo.value = targetValue;
       }
       combo.dispatchEvent(new Event('change'));
       scheduleArtifactCleanup();
@@ -116,8 +139,12 @@
 
   function persistLanguage(lang) {
     const normalized = isSupported(lang) ? lang : defaultLanguage;
-    const cookieValue = `/pt/${normalized}`;
-    setCookie('googtrans', cookieValue);
+    if (normalized === defaultLanguage) {
+      deleteCookie('googtrans');
+    } else {
+      const cookieValue = `/pt/${normalized}`;
+      setCookie('googtrans', cookieValue);
+    }
     localStorage.setItem('preferredLanguage', normalized);
   }
 
