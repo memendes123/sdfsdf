@@ -57,6 +57,9 @@ Automação de comentários para Steam integrada ao [Rep4Rep.com](https://rep4re
 3. Preencha `accounts.txt` com uma conta por linha (`username:senha:shared_secret`).
 4. (Opcional) Popule `data/users.json` apenas como semente. Na primeira execução os dados são migrados para o SQLite automaticamente.
 5. Inicie apenas o bot (`npm run bot`), somente o painel (`npm run painel`) ou ambos (`npm run dev`). No Windows, o arquivo `start-bot.bat` oferece um menu para iniciar apenas a CLI ou CLI + painel (com ou sem abrir o navegador).
+3. Preencha `accounts.txt` com uma conta por linha (`username:senha:shared_secret`).
+4. (Opcional) Popule `data/users.json` apenas como semente. Na primeira execução os dados são migrados para o SQLite automaticamente.
+5. Inicie apenas o bot (`npm run bot`), somente o painel (`npm run painel`) ou ambos (`npm run dev`).
 
 ## 🔄 Fluxo de trabalho
 - **Uso próprio via terminal:** a CLI utiliza sempre a `REP4REP_KEY` do `.env`, garantindo prioridade às suas tarefas e funcionamento mesmo que não exista painel.
@@ -96,6 +99,10 @@ A opção 15 impõe automaticamente **100 contas** e **1000 comentários por con
 - Um serviço interno cria um **backup automático** do banco a cada 3 dias (ou quando nenhum backup recente é encontrado). Admins ainda podem gerar backups manuais sempre que desejarem.
 - O modo vigia pode ser acionado pela CLI (opção 16) ou pelo painel admin para manter o bot em execução contínua no servidor respeitando o limite de 100 contas / 1000 comentários.
 
+- Um serviço interno cria um **backup automático** do banco a cada 3 dias (ou quando nenhum backup recente é encontrado). Admins ainda podem gerar backups manuais sempre que desejarem.
+- O modo vigia pode ser acionado pela CLI (opção 16) ou pelo painel admin para manter o bot em execução contínua no servidor respeitando o limite de 100 contas / 1000 comentários.
+
+
 ## 🌐 Painel web
 O servidor Express roda em `http://localhost:3000` (ajustável via `PORT`). A rota raiz serve o portal do cliente; `/admin` abre o painel protegido por autenticação básica.
 
@@ -107,6 +114,9 @@ O servidor Express roda em `http://localhost:3000` (ajustável via `PORT`). A ro
 5. O card **Modo VPS / Vigia** permite iniciar/parar o loop automático diretamente do painel e acompanha status, intervalo configurado e erros do ciclo.
 6. O card **Fila de execuções** mostra pedidos pendentes, histórico recente e permite atualizar a fila manualmente.
 7. Clique em **Gerenciar** na tabela de clientes para abrir o editor lateral e ajustar dados completos (status, créditos, key, telefone, role) sem editar código.
+6. Clique em **Gerenciar** na tabela de clientes para abrir o editor lateral e ajustar dados completos (status, créditos, key, telefone, role) sem editar código.
+
+
 
 ### Portal do cliente
 - Cadastro exige nome completo, username, email, senha (≥ 8 caracteres), data de nascimento, Discord ID, Rep4Rep ID e telefone/WhatsApp com DDI.
@@ -150,6 +160,7 @@ npm run painel  # Inicia apenas o painel web (web/server.js)
 npm run dev     # Executa CLI + painel simultaneamente
 install-bot.bat # (Windows) prepara .env e instala dependências
 start-bot.bat   # (Windows) inicia CLI e/ou painel com menu interativo
+
 ```
 
 ## 💡 Dicas e suporte

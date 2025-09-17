@@ -31,6 +31,9 @@
   let cachedUsers = [];
   let cachedQueue = window.__INITIAL_QUEUE__ || null;
 
+  let toastTimeout = null;
+  let cachedUsers = [];
+
   function showToast(message, variant = 'success') {
     if (!toastEl) return;
     toastEl.textContent = message;

@@ -113,6 +113,7 @@ router.post('/api/run', async (req, res) => {
       });
       const queue = await runQueue.getQueueSnapshot();
       return { message: '✅ Execução concluída com prioridade.', summary, queue };
+      return { message: '✅ Execução concluída com prioridade.', summary };
     },
     stats: async () => {
       const stats = await collectUsageStats();

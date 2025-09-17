@@ -288,6 +288,8 @@ async function assertUniqueFields({ email, username, discordId, rep4repId }, { i
 }
 
 async function createUserRecord(data, { defaultStatus = 'pending', allowRoleOverride = true } = {}) {
+async function createUserRecord(data, { defaultStatus = 'pending' } = {}) {
+
   await ensureDataFile();
 
   const username = requireString(data.username, 'Informe um username.');

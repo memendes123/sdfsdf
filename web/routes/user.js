@@ -5,6 +5,13 @@ const userStore = require('../services/userStore');
 const { collectUsageStats, describeApiError } = require('../../src/util.cjs');
 const rep4repApi = require('../../src/api.cjs');
 const runQueue = require('../../src/runQueue.cjs');
+const {
+  autoRun,
+  collectUsageStats,
+  removeRemoteProfiles,
+  describeApiError,
+} = require('../../src/util.cjs');
+const rep4repApi = require('../../src/api.cjs');
 
 function extractAuth(req) {
   const authHeader = req.header('authorization');
@@ -166,6 +173,34 @@ router.post('/run', async (req, res) => {
     return res.status(400).json({
       success: false,
       error: 'Nenhum perfil Rep4Rep encontrado. Adicione contas antes de executar o comando.',
+  try {
+    remoteProfiles = await rep4repApi.getSteamProfiles({ token: req.user.rep4repKey });
+  } catch (error) {
+    return res.status(502).json({ success: false, error: describeApiError(error) });
+  }
+
+  if (!Array.isArray(remoteProfiles) || remoteProfiles.length === 0) {
+    return res.status(400).json({
+      success: false,
+      error: 'Nenhum perfil Rep4Rep encontrado. Adicione contas antes de executar o comando.',
+    });
+  }
+
+  const creditLimit = isAdmin ? Infinity : req.user.credits;
+  let usedCredits = 0;
+
+  try {
+    const summary = await autoRun({
+      apiToken: req.user.rep4repKey,
+      maxCommentsPerAccount: 1000,
+      accountLimit: 100,
+      onTaskComplete: () => {
+        if (isAdmin) {
+          return true;
+        }
+        usedCredits += 1;
+        return usedCredits < creditLimit;
+      },
     });
   }
 
@@ -184,6 +219,26 @@ router.post('/run', async (req, res) => {
         ? 'Você já possui uma execução aguardando processamento. Acompanhe sua posição na fila.'
         : 'Pedido adicionado à fila com sucesso. Aguarde a sua vez para começar.',
       queue: queueStatus,
+    const consumed = isAdmin
+      ? summary.totalComments ?? 0
+      : Math.min(summary.totalComments ?? usedCredits, creditLimit);
+    let updatedUser = req.user;
+    if (!isAdmin && consumed > 0) {
+      updatedUser = await userStore.consumeCredits(req.user.id, consumed);
+    }
+
+    const cleanup = await removeRemoteProfiles(summary, {
+      apiClient: rep4repApi,
+      apiToken: req.user.rep4repKey,
+    });
+
+    res.json({
+      success: true,
+      message: 'Execução concluída.',
+      summary,
+      creditsConsumed: consumed,
+      remainingCredits: updatedUser.credits,
+      cleanup,
     });
   } catch (error) {
     console.error('[API usuário] Falha ao enfileirar execução:', error);
