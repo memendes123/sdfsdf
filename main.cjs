@@ -16,7 +16,7 @@ const {
     usageStats,
     resetProfileCookies,
     backupDatabase
-} = require('./util.cjs');
+} = require('./src/util.cjs');
 
 require('dotenv').config();
 const readline = require('readline');
