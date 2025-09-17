@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<html>
+<head><title>Logs</title></head>
+<body>
+<h2>📜 Logs</h2>
+<% logs.forEach(log => { %>
+    <h3><%= log.name %></h3>
+    <pre><%= log.content %></pre>
+<% }) %>
+</body>
+</html>
