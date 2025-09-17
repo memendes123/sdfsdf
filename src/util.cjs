@@ -8,10 +8,17 @@ const ReadLine = require('readline');
 const moment = require('moment');
 require('dotenv').config();
 
-let rl = ReadLine.createInterface({
-    input: process.stdin,
-    output: process.stdout
-});
+let rl = null;
+
+function getReadline() {
+    if (!rl) {
+        rl = ReadLine.createInterface({
+            input: process.stdin,
+            output: process.stdout
+        });
+    }
+    return rl;
+}
 
 const statusMessage = {
     inactive: 0,
@@ -52,6 +59,9 @@ function logInvalidAccount(username, reason) {
 
 function removeFromAccountsFile(username) {
     const filePath = path.join(__dirname, '..', 'accounts.txt');
+    if (!fs.existsSync(filePath)) {
+        return;
+    }
     const lines = fs.readFileSync(filePath, 'utf-8').split('\n');
     const filtered = lines.filter(line => !line.startsWith(username + ':'));
     fs.writeFileSync(filePath, filtered.join('\n'));
@@ -301,9 +311,14 @@ async function loginWithRetries(client, profileOrUsername, password, sharedSecre
 
 
 async function sleep(millis) {
-    let sec = Math.round(millis / 1000);
+    const ms = Number(millis) || 0;
+    if (ms <= 0) {
+        return Promise.resolve();
+    }
+
+    const sec = Math.round(ms / 1000);
     log(`[ ${sec}s delay ] ...`, true);
-    return new Promise(resolve => setTimeout(resolve, millis));
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 async function authAllProfiles() {
@@ -490,7 +505,7 @@ async function promptForCode(username, client) {
     }
 
     let res =  await new Promise(resolve => {
-        rl.question('>> ', resolve);
+        getReadline().question('>> ', resolve);
     });
     return res;
 }
@@ -526,14 +541,13 @@ async function addProfilesFromFile() {
 async function removeFromRep4Rep(steamId) {
     try {
         const profiles = await api.getSteamProfiles();
-        const match = profiles.find(p => p.steamId === steamId);
-        if (match) {
-            await fetch(`https://rep4rep.com/pub-api/user/steamprofiles/remove`, {
-                method: 'POST',
-                body: api.buildForm({ steamProfile: steamId }),
-            });
-            log(`[Rep4Rep] Removed steamId: ${steamId}`);
+        const match = Array.isArray(profiles) && profiles.find(p => p.steamId === steamId);
+        if (!match) {
+            return;
         }
+
+        await api.removeSteamProfile(steamId);
+        log(`[Rep4Rep] Removed steamId: ${steamId}`);
     } catch (err) {
         log(`[ERROR] Failed to remove from Rep4Rep: ${err.message}`);
     }
@@ -646,24 +660,37 @@ async function clearInvalidAccounts() {
     log('Perfis inválidos removidos.');
 }
 
-async function usageStats() {
+async function collectUsageStats() {
     const profiles = await db.getAllProfiles();
-    const total = profiles.length;
-    let ativos = 0, inativos = 0, comentariosHoje = 0;
+    const totals = {
+        total: profiles.length,
+        ready: 0,
+        coolingDown: 0,
+        commentsLast24h: 0,
+    };
 
-    for (const p of profiles) {
-        const diff = moment().diff(moment(p.lastComment), 'hours');
-        if (!p.lastComment || diff >= 24) inativos++;
-        else ativos++;
-        const count = await db.getCommentsInLast24Hours(p.steamId);
-        comentariosHoje += count;
+    for (const profile of profiles) {
+        const lastCommentMoment = profile.lastComment ? moment(profile.lastComment) : null;
+        const diff = lastCommentMoment ? moment().diff(lastCommentMoment, 'hours') : Infinity;
+        if (!lastCommentMoment || diff >= 24) {
+            totals.ready++;
+        } else {
+            totals.coolingDown++;
+        }
+        const count = await db.getCommentsInLast24Hours(profile.steamId);
+        totals.commentsLast24h += count;
     }
 
+    return totals;
+}
+
+async function usageStats() {
+    const stats = await collectUsageStats();
     log('📊 Estatísticas de Uso:');
-    log(`Total perfis: ${total}`);
-    log(`Perfis ativos (prontos para comentar): ${inativos}`);
-    log(`Perfis aguardando cooldown: ${ativos}`);
-    log(`Total de comentários nas últimas 24h: ${comentariosHoje}`);
+    log(`Total perfis: ${stats.total}`);
+    log(`Perfis ativos (prontos para comentar): ${stats.ready}`);
+    log(`Perfis aguardando cooldown: ${stats.coolingDown}`);
+    log(`Total de comentários nas últimas 24h: ${stats.commentsLast24h}`);
 }
 
 async function resetProfileCookies() {
@@ -694,6 +721,7 @@ function backupDatabase() {
     const dest = path.join(destDir, `db-${timestamp}.sqlite`);
     fs.copyFileSync(src, dest);
     log(`📦 Backup criado em: ${dest}`);
+    return dest;
 }
 
 module.exports = { 
@@ -717,6 +745,7 @@ module.exports = {
     exportProfilesToCSV,
     clearInvalidAccounts,
     usageStats,
+    collectUsageStats,
     resetProfileCookies,
     backupDatabase
 };
