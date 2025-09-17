@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 
 const userStore = require('../services/userStore');
-const { collectUsageStats, describeApiError } = require('../../src/util.cjs');
+const { collectUsageStats, describeApiError, queueAutomaticBackup } = require('../../src/util.cjs');
 const rep4repApi = require('../../src/api.cjs');
 const runQueue = require('../../src/runQueue.cjs');
 
@@ -51,6 +51,9 @@ function extractAuth(req) {
 router.post('/register', async (req, res) => {
   try {
     const user = await userStore.registerUser(req.body || {});
+    queueAutomaticBackup({ reason: 'novo usuário (registro)' }).catch((error) => {
+      console.warn('[API] Falha ao agendar backup automático após registro:', error.message);
+    });
     res.status(201).json({
       success: true,
       message: 'Cadastro enviado. Ative o cliente atribuindo créditos e status ativo.',

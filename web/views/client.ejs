@@ -19,7 +19,18 @@
                     <p class="brand__subtitle">Área do cliente — acompanhe créditos e rode tarefas</p>
                 </div>
             </div>
-            <button class="btn btn--ghost" type="button" data-logout hidden>Sair</button>
+            <div class="client-header__actions">
+                <div class="language-switch" data-language-switch>
+                    <button type="button" class="btn btn--ghost" data-language-toggle aria-haspopup="true" aria-expanded="false">
+                        🌐 <span data-language-label>Português</span>
+                    </button>
+                    <div class="language-switch__dropdown" data-language-dropdown hidden role="menu">
+                        <button type="button" class="language-option is-active" data-language-option="pt" role="menuitemradio" aria-checked="true">Português</button>
+                        <button type="button" class="language-option" data-language-option="en" role="menuitemradio" aria-checked="false">English</button>
+                    </div>
+                </div>
+                <button class="btn btn--ghost" type="button" data-logout hidden>Sair</button>
+            </div>
         </header>
 
         <main class="client-main">
@@ -172,6 +183,8 @@
         </main>
         <div class="toast" data-client-toast hidden></div>
     </div>
+    <div id="google_translate_container" class="language-switch__container" aria-hidden="true"></div>
+    <script src="/language.js" defer></script>
     <script src="/client.js" defer></script>
 </body>
 </html>

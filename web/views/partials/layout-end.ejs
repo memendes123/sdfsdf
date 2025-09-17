@@ -3,67 +3,12 @@
             <span>&copy; <%= new Date().getFullYear() %> Rep4Rep Bot · Painel administrativo</span>
         </footer>
     </div>
-    <script>
-        (function () {
-            const toggle = document.querySelector('[data-translate-toggle]');
-            const dropdown = document.querySelector('[data-translate-container]');
-            if (!toggle || !dropdown) {
-                return;
-            }
-
-            const closeDropdown = () => {
-                dropdown.hidden = true;
-                toggle.setAttribute('aria-expanded', 'false');
-            };
-
-            toggle.addEventListener('click', (event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                const willOpen = dropdown.hidden;
-                dropdown.hidden = !willOpen;
-                toggle.setAttribute('aria-expanded', String(willOpen));
-            });
-
-            document.addEventListener('click', (event) => {
-                if (!dropdown.contains(event.target) && !toggle.contains(event.target)) {
-                    closeDropdown();
-                }
-            });
-
-            document.addEventListener('keydown', (event) => {
-                if (event.key === 'Escape') {
-                    closeDropdown();
-                }
-            });
-
-            window.googleTranslateElementInit = function () {
-                if (!window.google || !window.google.translate) {
-                    return;
-                }
-                new window.google.translate.TranslateElement(
-                    {
-                        pageLanguage: 'pt',
-                        includedLanguages: 'pt,en,es,fr,it,de',
-                        layout: window.google.translate.TranslateElement.InlineLayout.SIMPLE,
-                    },
-                    'google_translate_element',
-                );
-            };
-
-            const script = document.createElement('script');
-            script.src = 'https://translate.google.com/translate_a/element.js?cb=googleTranslateElementInit';
-            script.defer = true;
-            document.body.appendChild(script);
-        })();
-    </script>
+    <div id="google_translate_container" class="language-switch__container" aria-hidden="true"></div>
+    <script src="/language.js" defer></script>
     <% const panelBaseHref =
-        typeof panelBase === 'string' && panelBase
-            ? panelBase
-            : typeof basePath === 'string' && basePath
-            ? basePath
-            : typeof baseUrl === 'string'
-            ? baseUrl
-            : '';
+        (typeof panelBase === 'string' && panelBase) ||
+        (typeof baseUrl === 'string' && baseUrl) ||
+        '';
     %>
     <% if (includePanelScript) { %>
         <script>
