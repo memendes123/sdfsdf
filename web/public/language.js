@@ -6,12 +6,29 @@
   const defaultLanguage = 'pt';
   let currentLanguage = defaultLanguage;
 
+  function storageGet(key) {
+    try {
+      return window.localStorage.getItem(key);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function storageSet(key, value) {
+    try {
+      window.localStorage.setItem(key, value);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
   function isSupported(lang) {
     return Object.prototype.hasOwnProperty.call(languages, lang);
   }
 
   function getPreferredLanguage() {
-    const stored = localStorage.getItem('preferredLanguage');
+    const stored = storageGet('preferredLanguage');
     if (stored && isSupported(stored)) {
       return stored;
     }
@@ -125,10 +142,26 @@
     });
   }
 
-  const artifactCleanupDelays = [0, 120, 400, 1200, 2400];
+  function renderLanguageOptions(dropdown) {
+    if (!dropdown) {
+      return;
+    }
+
+    dropdown.innerHTML = '';
+    Object.entries(languages).forEach(([code, entry]) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'language-option';
+      button.dataset.languageOption = code;
+      button.textContent = entry.label;
+      button.setAttribute('role', 'menuitemradio');
+      button.setAttribute('aria-checked', 'false');
+      button.setAttribute('translate', 'no');
+      dropdown.appendChild(button);
+    });
   }
 
-  const artifactCleanupDelays = [0, 120, 400];
+  const artifactCleanupDelays = [0, 120, 400, 1200, 2400];
   function scheduleArtifactCleanup() {
     artifactCleanupDelays.forEach((delay) => {
       window.setTimeout(cleanGoogleArtifacts, delay);
@@ -172,7 +205,7 @@
       const cookieValue = `/pt/${normalized}`;
       setCookie('googtrans', cookieValue);
     }
-    localStorage.setItem('preferredLanguage', normalized);
+    storageSet('preferredLanguage', normalized);
   }
 
   function setLanguage(lang, { persist = true } = {}) {
@@ -273,6 +306,8 @@
     if (!toggle || !dropdown) {
       return;
     }
+
+    renderLanguageOptions(dropdown);
 
     toggle.addEventListener('click', (event) => {
       event.preventDefault();

@@ -27,6 +27,7 @@ function mapQueueRow(row) {
     status: row.status,
     maxCommentsPerAccount: row.maxCommentsPerAccount != null ? Number(row.maxCommentsPerAccount) : 1000,
     accountLimit: row.accountLimit != null ? Number(row.accountLimit) : 100,
+    requestedComments: row.requestedComments != null ? Number(row.requestedComments) : 0,
     enqueuedAt: row.enqueuedAt,
     startedAt: row.startedAt || null,
     finishedAt: row.finishedAt || null,
@@ -68,6 +69,24 @@ function mapQueueRowWithUser(row, { includeSensitive = false } = {}) {
   return job;
 }
 
+function buildJobWithUserQuery({ includeSensitive = false } = {}) {
+  const columns = [
+    'q.*',
+    'u.username AS userUsername',
+    'u.fullName AS userFullName',
+    'u.role AS userRole',
+    'u.status AS userStatus',
+    'u.discordWebhookUrl AS userDiscordWebhookUrl',
+    'u.credits AS userCredits',
+  ];
+
+  if (includeSensitive) {
+    columns.push('u.rep4repKey AS userRep4repKey');
+  }
+
+  return `SELECT ${columns.join(', ')} FROM run_queue q LEFT JOIN app_user u ON u.id = q.userId`;
+}
+
 function sanitizeLimit(value, fallback, max) {
   const num = Number(value);
   if (!Number.isFinite(num) || num <= 0) {
@@ -76,21 +95,20 @@ function sanitizeLimit(value, fallback, max) {
   return Math.min(max, Math.max(1, Math.floor(num)));
 }
 
-async function enqueueJob({ userId, command = 'autoRun', maxCommentsPerAccount = 1000, accountLimit = 100 }) {
+async function enqueueJob({
+  userId,
+  command = 'autoRun',
+  maxCommentsPerAccount = 1000,
+  accountLimit = 100,
+  requestedComments = 0,
+}) {
   if (!userId) {
     throw new Error('userId obrigatório para enfileirar execução.');
   }
 
   const connection = await db.getConnection();
   const existing = await connection.get(
-    `SELECT q.*, u.username AS userUsername, u.fullName AS userFullName, u.role AS userRole, u.status AS userStatus,
-            u.discordWebhookUrl AS userDiscordWebhookUrl,
-            u.credits AS userCredits
-       FROM run_queue q
-       LEFT JOIN app_user u ON u.id = q.userId
-      WHERE q.userId = ? AND q.status IN ('pending','running')
-      ORDER BY datetime(q.enqueuedAt)
-      LIMIT 1`,
+    `${buildJobWithUserQuery()} WHERE q.userId = ? AND q.status IN ('pending','running') ORDER BY datetime(q.enqueuedAt) LIMIT 1`,
     [userId],
   );
 
@@ -103,21 +121,17 @@ async function enqueueJob({ userId, command = 'autoRun', maxCommentsPerAccount =
   const sanitizedMax = sanitizeLimit(maxCommentsPerAccount, 1000, 1000);
   const sanitizedAccounts = sanitizeLimit(accountLimit, 100, 100);
 
+  const sanitizedRequested = Number.isFinite(requestedComments)
+    ? Math.max(0, Math.floor(requestedComments))
+    : 0;
+
   await connection.run(
-    `INSERT INTO run_queue (id, userId, command, status, maxCommentsPerAccount, accountLimit, enqueuedAt)
-     VALUES (?, ?, ?, 'pending', ?, ?, ?)`,
-    [id, userId, command || 'autoRun', sanitizedMax, sanitizedAccounts, enqueuedAt],
+    `INSERT INTO run_queue (id, userId, command, status, maxCommentsPerAccount, accountLimit, requestedComments, enqueuedAt)
+     VALUES (?, ?, ?, 'pending', ?, ?, ?, ?)`,
+    [id, userId, command || 'autoRun', sanitizedMax, sanitizedAccounts, sanitizedRequested, enqueuedAt],
   );
 
-  const inserted = await connection.get(
-    `SELECT q.*, u.username AS userUsername, u.fullName AS userFullName, u.role AS userRole, u.status AS userStatus,
-            u.discordWebhookUrl AS userDiscordWebhookUrl,
-            u.credits AS userCredits
-       FROM run_queue q
-       LEFT JOIN app_user u ON u.id = q.userId
-      WHERE q.id = ?`,
-    [id],
-  );
+  const inserted = await connection.get(`${buildJobWithUserQuery()} WHERE q.id = ?`, [id]);
 
   return { alreadyQueued: false, job: mapQueueRowWithUser(inserted) };
 }
@@ -385,25 +399,20 @@ async function failJob(id, errorMessage) {
   ).then((row) => mapQueueRowWithUser(row));
 }
 
-async function cancelJob(id, { reason = 'Cancelado manualmente' } = {}) {
+async function cancelJob(id, { reason = 'Cancelado manualmente', expectedUserId = null } = {}) {
   if (!id) {
     throw new Error('ID do pedido obrigatório para cancelar.');
   }
 
   const connection = await db.getConnection();
-  const row = await connection.get(
-    `SELECT q.*, u.username AS userUsername, u.fullName AS userFullName, u.role AS userRole,
-            u.status AS userStatus, u.discordWebhookUrl AS userDiscordWebhookUrl,
-            u.credits AS userCredits
-            u.status AS userStatus, u.credits AS userCredits
-       FROM run_queue q
-       LEFT JOIN app_user u ON u.id = q.userId
-      WHERE q.id = ?`,
-    [id],
-  );
+  const row = await connection.get(`${buildJobWithUserQuery()} WHERE q.id = ?`, [id]);
 
   if (!row) {
     throw new Error('Pedido não encontrado.');
+  }
+
+  if (expectedUserId != null && String(row.userId) !== String(expectedUserId)) {
+    throw new Error('Pedido pertence a outro usuário.');
   }
 
   if (row.status === 'running') {
@@ -425,18 +434,136 @@ async function cancelJob(id, { reason = 'Cancelado manualmente' } = {}) {
     [finishedAt, reason || 'Cancelado manualmente', id],
   );
 
-  const updated = await connection.get(
-    `SELECT q.*, u.username AS userUsername, u.fullName AS userFullName, u.role AS userRole,
-            u.status AS userStatus, u.discordWebhookUrl AS userDiscordWebhookUrl,
-            u.credits AS userCredits
-            u.status AS userStatus, u.credits AS userCredits
-       FROM run_queue q
-       LEFT JOIN app_user u ON u.id = q.userId
-      WHERE q.id = ?`,
+  const updated = await connection.get(`${buildJobWithUserQuery()} WHERE q.id = ?`, [id]);
+
+  return { cancelled: true, job: mapQueueRowWithUser(updated) };
+}
+
+async function releaseJob(id, { reason = null } = {}) {
+  if (!id) {
+    return { released: false };
+  }
+
+  const connection = await db.getConnection();
+  const update = await connection.run(
+    `UPDATE run_queue
+        SET status = 'pending',
+            startedAt = NULL,
+            error = NULL
+      WHERE id = ? AND status = 'running'`,
     [id],
   );
 
-  return { cancelled: true, job: mapQueueRowWithUser(updated) };
+  if (!update || update.changes === 0) {
+    return { released: false };
+  }
+
+  if (reason) {
+    try {
+      await connection.run(
+        `UPDATE run_queue SET cleanup = NULL WHERE id = ?`,
+        [id],
+      );
+    } catch (cleanupError) {
+      console.warn('[runQueue] Falha ao limpar metadata ao devolver pedido:', cleanupError.message);
+    }
+  }
+
+  const row = await connection.get(`${buildJobWithUserQuery()} WHERE q.id = ?`, [id]);
+  const job = mapQueueRowWithUser(row);
+  job.status = 'pending';
+  job.startedAt = null;
+  job.finishedAt = null;
+  return { released: true, job };
+}
+
+async function reorderJob(id, { position } = {}) {
+  if (!id) {
+    throw new Error('ID do pedido obrigatório para reordenar.');
+  }
+
+  const target = Number(position);
+  if (!Number.isFinite(target) || target < 1) {
+    throw new Error('Posição inválida informada para reordenação.');
+  }
+
+  const connection = await db.getConnection();
+  const orderRows = await connection.all(
+    `SELECT id, status
+       FROM run_queue
+      WHERE status IN ('pending','running')
+      ORDER BY datetime(enqueuedAt)`
+  );
+
+  const pendingRows = orderRows.filter((row) => row.status === 'pending');
+  const currentIndex = pendingRows.findIndex((row) => row.id === id);
+
+  if (currentIndex === -1) {
+    throw new Error('Apenas pedidos pendentes podem ser reordenados.');
+  }
+
+  const clampedIndex = Math.min(pendingRows.length - 1, Math.max(0, Math.floor(target) - 1));
+  if (clampedIndex === currentIndex) {
+    const unchanged = await connection.get(`${buildJobWithUserQuery()} WHERE q.id = ?`, [id]);
+    return { changed: false, job: mapQueueRowWithUser(unchanged) };
+  }
+
+  const [movingRow] = pendingRows.splice(currentIndex, 1);
+  pendingRows.splice(clampedIndex, 0, movingRow);
+
+  const baseTime = Date.now();
+  await connection.run('BEGIN TRANSACTION');
+  try {
+    for (let index = 0; index < pendingRows.length; index += 1) {
+      const row = pendingRows[index];
+      const timestamp = new Date(baseTime + index).toISOString();
+      await connection.run(
+        `UPDATE run_queue SET enqueuedAt = ? WHERE id = ? AND status = 'pending'`,
+        [timestamp, row.id],
+      );
+    }
+    await connection.run('COMMIT');
+  } catch (error) {
+    await connection.run('ROLLBACK');
+    throw error;
+  }
+
+  const updated = await connection.get(`${buildJobWithUserQuery()} WHERE q.id = ?`, [id]);
+  return { changed: true, job: mapQueueRowWithUser(updated) };
+}
+
+async function cancelAllPendingJobs({ reason = 'Cancelado em massa (painel)' } = {}) {
+  const connection = await db.getConnection();
+  const pendingRows = await connection.all(
+    `${buildJobWithUserQuery()} WHERE q.status = 'pending' ORDER BY datetime(q.enqueuedAt)`
+  );
+
+  if (pendingRows.length === 0) {
+    return { cancelledCount: 0, jobs: [] };
+  }
+
+  const finishedAt = new Date().toISOString();
+  await connection.run(
+    `UPDATE run_queue
+        SET status = 'cancelled',
+            finishedAt = ?,
+            durationMs = 0,
+            error = ?
+      WHERE status = 'pending'`,
+    [finishedAt, reason || 'Cancelado em massa (painel)'],
+  );
+
+  const placeholders = pendingRows.map(() => '?').join(', ');
+  const ids = pendingRows.map((row) => row.id);
+  const updatedRows = await connection.all(
+    `${buildJobWithUserQuery()} WHERE q.id IN (${placeholders})`,
+    ids,
+  );
+
+  return {
+    cancelledCount: updatedRows.length,
+    jobs: updatedRows.map((row) => mapQueueRowWithUser(row)),
+  };
 }
 
 async function clearCompleted({ maxEntries = 100 } = {}) {
@@ -462,5 +589,8 @@ module.exports = {
   completeJob,
   failJob,
   cancelJob,
+  releaseJob,
+  reorderJob,
+  cancelAllPendingJobs,
   clearCompleted,
 };
