@@ -6,6 +6,8 @@
   const runButton = document.querySelector('[data-run-button]');
   const runOutput = document.querySelector('[data-run-output]');
   const runTotalInput = document.querySelector('[data-run-total]');
+  const runMaxInput = document.querySelector('[data-run-max]');
+  const runAccountsInput = document.querySelector('[data-run-accounts]');
   const keyForm = document.querySelector('[data-key-form]');
   const statusBadge = document.querySelector('[data-client-status]');
   const creditsEl = document.querySelector('[data-client-credits]');
@@ -252,6 +254,14 @@
 
     if (totalValue > 0) {
       payload.totalComments = totalValue;
+    const maxValue = runMaxInput ? sanitizeLimit(runMaxInput.value, 1000, 1000) : 1000;
+    const accountValue = runAccountsInput ? sanitizeLimit(runAccountsInput.value, 100, 100) : 100;
+
+    if (maxValue) {
+      payload.maxCommentsPerAccount = maxValue;
+    }
+    if (accountValue) {
+      payload.accountLimit = accountValue;
     }
 
     return payload;
@@ -267,6 +277,11 @@
       } else if (!runTotalInput.value) {
         runTotalInput.value = runTotalInput.defaultValue || '';
       }
+    if (runMaxInput && applied.maxCommentsPerAccount != null) {
+      runMaxInput.value = applied.maxCommentsPerAccount;
+    }
+    if (runAccountsInput && applied.accountLimit != null) {
+      runAccountsInput.value = applied.accountLimit;
     }
   }
 
@@ -521,6 +536,9 @@
             if (infoParts.length) {
               lines.push(`Limites aplicados: ${infoParts.join(' · ')}`);
             }
+            lines.push(
+              `Limites aplicados: ${applied.maxCommentsPerAccount} comentário(s) · ${applied.accountLimit} conta(s)`,
+            );
           }
           runOutput.textContent = lines.join('\n');
           renderQueueStatus(data.queue);

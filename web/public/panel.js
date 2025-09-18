@@ -158,6 +158,7 @@
       } else {
         button.textContent = button.dataset.originalLabel;
       }
+      button.textContent = button.dataset.originalLabel;
     });
 
     if (status?.options) {
@@ -755,6 +756,9 @@
               : null,
         },
       });
+
+    if (isAutoRunStart) {
+      Object.assign(payload, getAutoRunPayload());
     }
 
     try {
@@ -841,6 +845,7 @@
       }
       showToast(error.message || 'Erro ao executar comando.', 'error');
       renderQueueRunnerStatus(previousStatus);
+      renderQueueRunnerStatus(queueRunnerStatus);
     } finally {
       if (button) button.disabled = false;
       renderQueueRunnerStatus(queueRunnerStatus);
