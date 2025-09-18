@@ -4,7 +4,14 @@ const dotenv = require('dotenv');
 const ROOT_DIR = path.join(__dirname, '..');
 dotenv.config({ path: path.join(ROOT_DIR, '.env') });
 
-const { FormData } = require('formdata-node');
+const { FormData: NodeFormData } = require('formdata-node');
+
+const FormDataCtor =
+  typeof globalThis.FormData === 'function'
+    ? globalThis.FormData
+    : typeof NodeFormData === 'function'
+      ? NodeFormData
+      : null;
 
 const fetchFn = globalThis.fetch
   ? (...args) => globalThis.fetch(...args)
@@ -70,12 +77,30 @@ class ApiWrapper {
   }
 
   buildForm(params = {}, tokenOverride) {
-    const form = new FormData();
+    const useFormData = typeof FormDataCtor === 'function';
+    const form = useFormData ? new FormDataCtor() : new URLSearchParams();
     const token = this.resolveToken(tokenOverride);
-    form.set('apiToken', token);
+    const setValue = (key, value) => {
+      if (typeof form.set === 'function') {
+        form.set(key, value);
+      } else {
+        form.append(key, value);
+      }
+    };
+
+    setValue('apiToken', token);
     for (const [key, value] of Object.entries(params)) {
       if (value === undefined || value === null) continue;
-      form.set(key, value);
+      if (Array.isArray(value)) {
+        for (const entry of value) {
+          const normalized = entry === undefined || entry === null ? '' : String(entry);
+          form.append(key, normalized);
+        }
+        continue;
+      }
+
+      const normalized = String(value);
+      setValue(key, normalized);
     }
     return form;
   }

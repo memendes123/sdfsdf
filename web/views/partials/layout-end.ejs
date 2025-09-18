@@ -14,6 +14,8 @@
         <script>
             window.__PANEL_BASE__ = <%- JSON.stringify(panelBaseHref) %>;
             window.__INITIAL_QUEUE__ = <%- JSON.stringify(typeof initialQueue !== 'undefined' ? initialQueue : null) %>;
+            window.__QUEUE_RUNNER__ = <%- JSON.stringify(typeof initialRunner !== 'undefined' ? initialRunner : null) %>;
+            window.__INITIAL_USERS__ = <%- JSON.stringify(typeof initialUsers !== 'undefined' ? initialUsers : null) %>;
         </script>
         <script src="/panel.js" defer></script>
     <% } %>

@@ -201,6 +201,7 @@ class DbWrapper extends EventEmitter {
         status TEXT NOT NULL DEFAULT 'pending',
         maxCommentsPerAccount INTEGER NOT NULL DEFAULT 1000,
         accountLimit INTEGER NOT NULL DEFAULT 100,
+        requestedComments INTEGER NOT NULL DEFAULT 0,
         enqueuedAt TEXT NOT NULL,
         startedAt TEXT,
         finishedAt TEXT,
@@ -223,14 +224,19 @@ class DbWrapper extends EventEmitter {
       CREATE INDEX IF NOT EXISTS idx_run_queue_user
       ON run_queue(userId, status)
     `);
+
+    const queueColumns = await this.db.all(`PRAGMA table_info(run_queue)`);
+    const hasRequestedComments = queueColumns.some((column) => column.name === 'requestedComments');
+    if (!hasRequestedComments) {
+      await this.db.exec(`ALTER TABLE run_queue ADD COLUMN requestedComments INTEGER NOT NULL DEFAULT 0`);
+    }
   }
 
   async addOrUpdateProfile(username, password, sharedSecret, steamId, cookies) {
     await this._ensureReady();
     try {
-      const serializedCookies = typeof cookies === 'string'
-        ? cookies
-        : JSON.stringify(cookies || []);
+      const serializedCookies =
+        typeof cookies === 'string' ? cookies : JSON.stringify(cookies || []);
       let existingProfile = null;
 
       if (steamId) {
@@ -246,9 +252,6 @@ class DbWrapper extends EventEmitter {
       }
 
       let changeType = existingProfile ? 'profile.update' : 'profile.insert';
-      let dbWriteResult = null;
-      if (existingProfile) {
-        dbWriteResult = await this.db.run(
       let result = null;
 
       if (existingProfile) {
@@ -256,11 +259,17 @@ class DbWrapper extends EventEmitter {
           `UPDATE steamprofile
              SET username = ?, password = ?, sharedSecret = ?, steamId = ?, cookies = ?
            WHERE id = ?`,
-          [username, password, sharedSecret || null, steamId, serializedCookies, existingProfile.id],
+          [
+            username,
+            password,
+            sharedSecret || null,
+            steamId,
+            serializedCookies,
+            existingProfile.id,
+          ],
         );
       } else {
         try {
-          dbWriteResult = await this.db.run(
           result = await this.db.run(
             `INSERT INTO steamprofile (username, password, sharedSecret, steamId, cookies)
              VALUES (?, ?, ?, ?, ?)`,
@@ -278,7 +287,6 @@ class DbWrapper extends EventEmitter {
             if (conflicting) {
               existingProfile = conflicting;
               changeType = 'profile.update';
-              dbWriteResult = await this.db.run(
               result = await this.db.run(
                 `UPDATE steamprofile
                    SET username = ?, password = ?, sharedSecret = ?, steamId = ?, cookies = ?
@@ -302,44 +310,12 @@ class DbWrapper extends EventEmitter {
       }
 
       console.log(`✅ Perfil ${username} adicionado/atualizado.`);
-      if (dbWriteResult?.changes > 0) {
-        const steamRef = steamId || existingProfile?.steamId || null;
-        this._emitChange({ type: changeType, username, steamId: steamRef });
-      }
-
-      await this.checkpoint('PASSIVE');
-      return dbWriteResult;
-
-      console.log(`✅ Perfil ${username} adicionado/atualizado.`);
       if (result?.changes > 0) {
         const steamRef = steamId || existingProfile?.steamId || null;
         this._emitChange({ type: changeType, username, steamId: steamRef });
       }
 
       await this.checkpoint('PASSIVE');
-
-      console.log(`✅ Perfil ${username} adicionado/atualizado.`);
-      if (result?.changes > 0) {
-        const steamRef = steamId || existingProfile?.steamId || null;
-        this._emitChange({ type: changeType, username, steamId: steamRef });
-      }
-
-      await this.checkpoint('PASSIVE');
-      const result = await this.db.run(`
-        INSERT INTO steamprofile (username, password, sharedSecret, steamId, cookies)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(steamId) DO UPDATE SET
-          username = excluded.username,
-          password = excluded.password,
-          sharedSecret = excluded.sharedSecret,
-          cookies = excluded.cookies
-      `, [username, password, sharedSecret || null, steamId, serializedCookies]);
-
-      console.log(`✅ Perfil ${username} adicionado/atualizado.`);
-      if (result?.changes > 0) {
-        const type = existingProfile ? 'profile.update' : 'profile.insert';
-        this._emitChange({ type, username, steamId: steamId || existingProfile?.steamId || null });
-      }
       return result;
     } catch (err) {
       console.error("❌ Erro ao adicionar/atualizar perfil:", err.message);
