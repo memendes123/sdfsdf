@@ -6,12 +6,29 @@
   const defaultLanguage = 'pt';
   let currentLanguage = defaultLanguage;
 
+  function storageGet(key) {
+    try {
+      return window.localStorage.getItem(key);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function storageSet(key, value) {
+    try {
+      window.localStorage.setItem(key, value);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
   function isSupported(lang) {
     return Object.prototype.hasOwnProperty.call(languages, lang);
   }
 
   function getPreferredLanguage() {
-    const stored = localStorage.getItem('preferredLanguage');
+    const stored = storageGet('preferredLanguage');
     if (stored && isSupported(stored)) {
       return stored;
     }
@@ -188,7 +205,7 @@
       const cookieValue = `/pt/${normalized}`;
       setCookie('googtrans', cookieValue);
     }
-    localStorage.setItem('preferredLanguage', normalized);
+    storageSet('preferredLanguage', normalized);
   }
 
   function setLanguage(lang, { persist = true } = {}) {

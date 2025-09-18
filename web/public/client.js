@@ -36,9 +36,36 @@
     token: 'rep4repToken',
   };
 
+  function storageGet(key) {
+    try {
+      const value = window.localStorage.getItem(key);
+      return value !== null ? value : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function storageSet(key, value) {
+    try {
+      window.localStorage.setItem(key, value);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function storageRemove(key) {
+    try {
+      window.localStorage.removeItem(key);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
   const state = {
-    userId: window.localStorage.getItem(storageKeys.userId) || null,
-    token: window.localStorage.getItem(storageKeys.token) || null,
+    userId: storageGet(storageKeys.userId),
+    token: storageGet(storageKeys.token),
     user: null,
     queue: null,
   };
@@ -84,8 +111,8 @@
     state.token = token;
     state.user = user || null;
     if (id && token) {
-      window.localStorage.setItem(storageKeys.userId, id);
-      window.localStorage.setItem(storageKeys.token, token);
+      storageSet(storageKeys.userId, id);
+      storageSet(storageKeys.token, token);
       if (logoutButton) {
         logoutButton.hidden = false;
       }
@@ -97,8 +124,8 @@
     state.token = null;
     state.user = null;
     state.queue = null;
-    window.localStorage.removeItem(storageKeys.userId);
-    window.localStorage.removeItem(storageKeys.token);
+    storageRemove(storageKeys.userId);
+    storageRemove(storageKeys.token);
     if (logoutButton) {
       logoutButton.hidden = true;
     }

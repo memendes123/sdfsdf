@@ -124,6 +124,7 @@
   function renderQueueRunnerStatus(status) {
     queueRunnerStatus = status || null;
     const running = Boolean(status?.running);
+    const stopRequested = Boolean(status?.stopRequested);
 
     autoRunStartButtons.forEach((button) => {
       if (!button) return;
@@ -152,6 +153,11 @@
         button.dataset.originalLabel = button.textContent;
       }
       button.disabled = !running;
+      if (stopRequested) {
+        button.textContent = '⏳ Parada solicitada';
+      } else {
+        button.textContent = button.dataset.originalLabel;
+      }
       button.textContent = button.dataset.originalLabel;
     });
 
@@ -726,6 +732,30 @@
     const payload = { command };
     const isAutoRunStart = command === 'autoRun';
     const isAutoRunStop = command === 'autoRunStop';
+    const previousStatus = queueRunnerStatus;
+    const autoRunPayload = isAutoRunStart ? getAutoRunPayload() : null;
+
+    if (isAutoRunStart) {
+      Object.assign(payload, autoRunPayload);
+      renderQueueRunnerStatus({
+        ...(queueRunnerStatus || {}),
+        running: true,
+        stopRequested: false,
+        options: {
+          requestedComments:
+            autoRunPayload && Number.isFinite(autoRunPayload.totalComments)
+              ? autoRunPayload.totalComments
+              : null,
+          maxCommentsPerAccount:
+            autoRunPayload && Number.isFinite(autoRunPayload.maxCommentsPerAccount)
+              ? autoRunPayload.maxCommentsPerAccount
+              : null,
+          accountLimit:
+            autoRunPayload && Number.isFinite(autoRunPayload.accountLimit)
+              ? autoRunPayload.accountLimit
+              : null,
+        },
+      });
 
     if (isAutoRunStart) {
       Object.assign(payload, getAutoRunPayload());
@@ -740,6 +770,11 @@
       } else if (isAutoRunStop) {
         autoRunStopButtons.forEach((btn) => {
           if (btn) btn.disabled = true;
+        });
+        renderQueueRunnerStatus({
+          ...(queueRunnerStatus || {}),
+          running: Boolean(queueRunnerStatus?.running),
+          stopRequested: Boolean(queueRunnerStatus?.running),
         });
       }
 
@@ -809,6 +844,7 @@
         outputEl.textContent = `❌ ${error.message}`;
       }
       showToast(error.message || 'Erro ao executar comando.', 'error');
+      renderQueueRunnerStatus(previousStatus);
       renderQueueRunnerStatus(queueRunnerStatus);
     } finally {
       if (button) button.disabled = false;
